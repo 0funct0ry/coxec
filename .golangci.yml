@@ -1,0 +1,15 @@
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - gosimple
+    - ineffassign
+    - misspell
+linters-settings:
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment
