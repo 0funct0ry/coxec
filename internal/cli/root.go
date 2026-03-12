@@ -15,7 +15,11 @@ var Version = "dev"
 var rootCmd = &cobra.Command{
 	Use:   "coxec",
 	Short: "A swiss army knife for concurrent execution",
-	Long:  `coxec is a CLI tool and server for concurrent execution, providing templates, built-in clients, timing control, and structured output.`,
+	Long:  `coxec is a CLI tool and server for concurrent execution, providing templates, built-in clients, timing control, and structured output.
+
+By default: only command stdout appears on stdout; summary and diagnostics go to stderr.
+Use -v / --verbose to see detailed per-execution information on stderr.
+Use 2>/dev/null or redirect stderr to hide the summary.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		versionFlag, _ := cmd.Flags().GetBool("version")
 		verboseFlag, _ := cmd.Flags().GetBool("verbose")
@@ -43,8 +47,13 @@ var rootCmd = &cobra.Command{
 			return fmt.Errorf("concurrency (-c) must be greater than 0")
 		}
 
-		if iterations <= 0 {
-			return fmt.Errorf("iterations (-n) must be greater than 0")
+		if iterations == 0 {
+			fmt.Fprintln(os.Stderr, "No executions requested (-n 0)")
+			return nil
+		}
+
+		if iterations < 0 {
+			return fmt.Errorf("iterations (-n) must be greater than or equal to 0")
 		}
 
 		if executeCmd != "" {

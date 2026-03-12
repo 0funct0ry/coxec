@@ -50,13 +50,10 @@ func RunShellCommand(task Task, opts ExecOptions) error {
 	outputMu.Lock()
 	defer outputMu.Unlock()
 
-	// 1. Silent flag: only suppress child stdout/stderr if silent is true.
+	// 1. Silent flag: only suppress child stdout if silent is true.
 	if !opts.Silent {
 		if stdoutBuf.Len() > 0 {
 			os.Stdout.Write(stdoutBuf.Bytes())
-		}
-		if stderrBuf.Len() > 0 {
-			os.Stderr.Write(stderrBuf.Bytes())
 		}
 	}
 
@@ -142,7 +139,7 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 		fmt.Fprintf(os.Stderr, "Completed %d executions in %.3fs\n", totalExecs, poolDuration.Seconds())
 		fmt.Fprintf(os.Stderr, "Success: %d   Failed: %d\n", successCount.Load(), failCount.Load())
 		if rate > 0 {
-			fmt.Fprintf(os.Stderr, "Rate: ~%.1f req/s\n", rate)
+			fmt.Fprintf(os.Stderr, "Rate: ~%.1f executions/sec\n", rate)
 		}
 	}
 
