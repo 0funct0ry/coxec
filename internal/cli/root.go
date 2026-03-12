@@ -1,9 +1,12 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
+	"syscall"
 
 	"github.com/0funct0ry/coxec/internal/engine"
 	"github.com/spf13/cobra"
@@ -76,10 +79,14 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				close(tasks)
 			}()
 
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+
 			opts := engine.ExecOptions{
 				Verbose:    verboseFlag,
 				Silent:     silentFlag,
 				TotalTasks: iterations,
+				Context:    ctx,
 			}
 
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
@@ -103,11 +110,14 @@ func init() {
 // Execute runs the root command
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
+		if exitErr, ok := err.(*engine.ExitError); ok {
+			os.Exit(exitErr.Code)
+		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			os.Exit(exitErr.ExitCode())
 		}
 		// Fallback for other errors (like flag validation errors)
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		os.Exit(10)
 	}
 }

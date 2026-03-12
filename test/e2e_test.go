@@ -58,12 +58,17 @@ func TestSingleShellCommand(t *testing.T) {
 			name:           "Missing execution flags",
 			args:           []string{}, // no flags
 			expectedStderr: "Error: must provide one of -e, -f, or -t",
-			expectedExit:   1,
+			expectedExit:   10,
 		},
 		{
-			name:           "Command failure propagates exit code",
-			args:           []string{"-e", "exit 42"},
-			expectedExit:   42,
+			name:         "All commands fail",
+			args:         []string{"-e", "exit 42", "-c", "2"},
+			expectedExit: 2,
+		},
+		{
+			name:         "Partial command failure",
+			args:         []string{"-e", "[[ $COXEC_INDEX -eq 1 ]] && exit 0 || exit 1", "-c", "2", "-n", "2"},
+			expectedExit: 1,
 		},
 	}
 

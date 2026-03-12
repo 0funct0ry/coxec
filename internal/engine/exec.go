@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,19 @@ import (
 )
 
 var outputMu sync.Mutex
+
+// ExitError wraps an error with a specific exit code for the CLI
+type ExitError struct {
+	Code int
+	Err  error
+}
+
+func (e *ExitError) Error() string {
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return fmt.Sprintf("exit status %d", e.Code)
+}
 
 // Task defines a single execution target
 type Task struct {
@@ -23,12 +37,20 @@ type ExecOptions struct {
 	Verbose    bool
 	Silent     bool
 	TotalTasks int
+	Context    context.Context
 }
 
 // RunShellCommand executes a single command in the default shell
 // Captures output and handles printing based on ExecOptions
 func RunShellCommand(task Task, opts ExecOptions) error {
-	cmd := exec.Command("sh", "-c", task.Command)
+	var cmd *exec.Cmd
+	if opts.Context != nil {
+		cmd = exec.CommandContext(opts.Context, "sh", "-c", task.Command)
+	} else {
+		cmd = exec.Command("sh", "-c", task.Command)
+	}
+
+	cmd.Env = append(os.Environ(), fmt.Sprintf("COXEC_INDEX=%d", task.Index))
 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
@@ -108,6 +130,10 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 		go func() {
 			defer wg.Done()
 			for task := range tasks {
+				if opts.Context != nil && opts.Context.Err() != nil {
+					continue
+				}
+
 				if err := RunShellCommand(task, opts); err != nil {
 					failCount.Add(1)
 					errMu.Lock()
@@ -143,5 +169,23 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 		}
 	}
 
-	return firstErr
+	if opts.Context != nil && opts.Context.Err() != nil {
+		return &ExitError{Code: 130, Err: opts.Context.Err()}
+	}
+
+	total := successCount.Load() + failCount.Load()
+	if total == 0 {
+		return nil
+	}
+
+	fc := failCount.Load()
+	sc := successCount.Load()
+
+	if fc > 0 && sc == 0 {
+		return &ExitError{Code: 2, Err: firstErr}
+	} else if fc > 0 && sc > 0 {
+		return &ExitError{Code: 1, Err: firstErr}
+	}
+
+	return nil
 }
