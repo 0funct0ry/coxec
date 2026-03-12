@@ -27,6 +27,11 @@ var rootCmd = &cobra.Command{
 		fileFlag, _ := cmd.Flags().GetString("file")
 		templateFlag, _ := cmd.Flags().GetString("template")
 		concurrency, _ := cmd.Flags().GetInt("concurrency")
+		iterations, _ := cmd.Flags().GetInt("iterations")
+
+		if !cmd.Flags().Changed("iterations") {
+			iterations = concurrency
+		}
 
 		if executeCmd == "" && fileFlag == "" && templateFlag == "" {
 			return fmt.Errorf("must provide one of -e, -f, or -t")
@@ -36,19 +41,31 @@ var rootCmd = &cobra.Command{
 			return fmt.Errorf("concurrency (-c) must be greater than 0")
 		}
 
+		if iterations <= 0 {
+			return fmt.Errorf("iterations (-n) must be greater than 0")
+		}
+
 		if executeCmd != "" {
 			// Disable printing usage to avoid cluttering stderr on command failure
 			cmd.SilenceUsage = true
 			// We handle the error exiting locally to propagate exit code
 			cmd.SilenceErrors = true
 
-			tasks := make(chan string, concurrency)
-			for i := 0; i < concurrency; i++ {
-				tasks <- executeCmd
+			actualConcurrency := concurrency
+			if iterations < concurrency {
+				actualConcurrency = iterations
 			}
-			close(tasks)
 
-			return engine.RunJobPool(concurrency, tasks)
+			tasks := make(chan string, actualConcurrency)
+			
+			go func() {
+				for i := 0; i < iterations; i++ {
+					tasks <- executeCmd
+				}
+				close(tasks)
+			}()
+
+			return engine.RunJobPool(actualConcurrency, tasks)
 		}
 
 		return nil
@@ -61,6 +78,7 @@ func init() {
 	rootCmd.Flags().StringP("file", "f", "", "File containing commands (placeholder)")
 	rootCmd.Flags().StringP("template", "t", "", "Input template (placeholder)")
 	rootCmd.Flags().IntP("concurrency", "c", 1, "Number of concurrent executions")
+	rootCmd.Flags().IntP("iterations", "n", -1, "Total number of executions (defaults to concurrency)")
 }
 
 // Execute runs the root command
