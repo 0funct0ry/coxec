@@ -18,6 +18,8 @@ var rootCmd = &cobra.Command{
 	Long:  `coxec is a CLI tool and server for concurrent execution, providing templates, built-in clients, timing control, and structured output.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		versionFlag, _ := cmd.Flags().GetBool("version")
+		verboseFlag, _ := cmd.Flags().GetBool("verbose")
+		silentFlag, _ := cmd.Flags().GetBool("silent")
 		if versionFlag {
 			fmt.Printf("coxec version %s\n", Version)
 			return nil
@@ -56,16 +58,22 @@ var rootCmd = &cobra.Command{
 				actualConcurrency = iterations
 			}
 
-			tasks := make(chan string, actualConcurrency)
+			tasks := make(chan engine.Task, actualConcurrency)
 			
 			go func() {
 				for i := 0; i < iterations; i++ {
-					tasks <- executeCmd
+					tasks <- engine.Task{Index: i + 1, Command: executeCmd}
 				}
 				close(tasks)
 			}()
 
-			return engine.RunJobPool(actualConcurrency, tasks)
+			opts := engine.ExecOptions{
+				Verbose:    verboseFlag,
+				Silent:     silentFlag,
+				TotalTasks: iterations,
+			}
+
+			return engine.RunJobPool(actualConcurrency, tasks, opts)
 		}
 
 		return nil
@@ -73,7 +81,9 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.Flags().BoolP("version", "v", false, "Print the version number")
+	rootCmd.Flags().Bool("version", false, "Print the version number")
+	rootCmd.Flags().BoolP("verbose", "v", false, "Show detailed per-execution information on stderr")
+	rootCmd.Flags().Bool("silent", false, "Suppress child stdout/stderr payload")
 	rootCmd.Flags().StringP("execute", "e", "", "Command to execute")
 	rootCmd.Flags().StringP("file", "f", "", "File containing commands (placeholder)")
 	rootCmd.Flags().StringP("template", "t", "", "Input template (placeholder)")

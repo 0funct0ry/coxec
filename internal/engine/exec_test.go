@@ -8,27 +8,29 @@ import (
 )
 
 func TestRunJobPool_Success(t *testing.T) {
-	tasks := make(chan string, 3)
-	tasks <- "echo 1"
-	tasks <- "echo 2"
-	tasks <- "echo 3"
+	tasks := make(chan engine.Task, 3)
+	tasks <- engine.Task{Index: 1, Command: "echo 1"}
+	tasks <- engine.Task{Index: 2, Command: "echo 2"}
+	tasks <- engine.Task{Index: 3, Command: "echo 3"}
 	close(tasks)
 
-	err := engine.RunJobPool(2, tasks)
+	opts := engine.ExecOptions{TotalTasks: 3}
+	err := engine.RunJobPool(2, tasks, opts)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 }
 
 func TestRunJobPool_Concurrency(t *testing.T) {
-	tasks := make(chan string, 5)
+	tasks := make(chan engine.Task, 5)
 	for i := 0; i < 5; i++ {
-		tasks <- "sleep 1"
+		tasks <- engine.Task{Index: i + 1, Command: "sleep 1"}
 	}
 	close(tasks)
 
+	opts := engine.ExecOptions{TotalTasks: 5}
 	start := time.Now()
-	err := engine.RunJobPool(5, tasks)
+	err := engine.RunJobPool(5, tasks, opts)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -40,11 +42,12 @@ func TestRunJobPool_Concurrency(t *testing.T) {
 }
 
 func TestRunJobPool_ErrorPropagated(t *testing.T) {
-	tasks := make(chan string, 1)
-	tasks <- "exit 1"
+	tasks := make(chan engine.Task, 1)
+	tasks <- engine.Task{Index: 1, Command: "exit 1"}
 	close(tasks)
 
-	err := engine.RunJobPool(1, tasks)
+	opts := engine.ExecOptions{TotalTasks: 1}
+	err := engine.RunJobPool(1, tasks, opts)
 	if err == nil {
 		t.Fatalf("expected error from failed command, got nil")
 	}
