@@ -26,9 +26,14 @@ var rootCmd = &cobra.Command{
 		executeCmd, _ := cmd.Flags().GetString("execute")
 		fileFlag, _ := cmd.Flags().GetString("file")
 		templateFlag, _ := cmd.Flags().GetString("template")
+		concurrency, _ := cmd.Flags().GetInt("concurrency")
 
 		if executeCmd == "" && fileFlag == "" && templateFlag == "" {
 			return fmt.Errorf("must provide one of -e, -f, or -t")
+		}
+
+		if concurrency <= 0 {
+			return fmt.Errorf("concurrency (-c) must be greater than 0")
 		}
 
 		if executeCmd != "" {
@@ -37,7 +42,13 @@ var rootCmd = &cobra.Command{
 			// We handle the error exiting locally to propagate exit code
 			cmd.SilenceErrors = true
 
-			return engine.RunShellCommand(executeCmd)
+			tasks := make(chan string, concurrency)
+			for i := 0; i < concurrency; i++ {
+				tasks <- executeCmd
+			}
+			close(tasks)
+
+			return engine.RunJobPool(concurrency, tasks)
 		}
 
 		return nil
@@ -49,6 +60,7 @@ func init() {
 	rootCmd.Flags().StringP("execute", "e", "", "Command to execute")
 	rootCmd.Flags().StringP("file", "f", "", "File containing commands (placeholder)")
 	rootCmd.Flags().StringP("template", "t", "", "Input template (placeholder)")
+	rootCmd.Flags().IntP("concurrency", "c", 1, "Number of concurrent executions")
 }
 
 // Execute runs the root command
