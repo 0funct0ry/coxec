@@ -38,11 +38,26 @@ type ExecOptions struct {
 	Silent     bool
 	TotalTasks int
 	Context    context.Context
+	Stdout     interface {
+		Write([]byte) (int, error)
+	}
+	Stderr interface {
+		Write([]byte) (int, error)
+	}
 }
 
 // RunShellCommand executes a single command in the default shell
 // Captures output and handles printing based on ExecOptions
 func RunShellCommand(task Task, opts ExecOptions) error {
+	stdout := opts.Stdout
+	if stdout == nil {
+		stdout = os.Stdout
+	}
+	stderr := opts.Stderr
+	if stderr == nil {
+		stderr = os.Stderr
+	}
+
 	var cmd *exec.Cmd
 	if opts.Context != nil {
 		cmd = exec.CommandContext(opts.Context, "sh", "-c", task.Command)
@@ -75,7 +90,7 @@ func RunShellCommand(task Task, opts ExecOptions) error {
 	// 1. Silent flag: only suppress child stdout if silent is true.
 	if !opts.Silent {
 		if stdoutBuf.Len() > 0 {
-			os.Stdout.Write(stdoutBuf.Bytes())
+			stdout.Write(stdoutBuf.Bytes())
 		}
 	}
 
@@ -91,24 +106,24 @@ func RunShellCommand(task Task, opts ExecOptions) error {
 			durationStr = duration.Round(time.Microsecond).String()
 		}
 
-		fmt.Fprintf(os.Stderr, "[%d/%d] %s   %s   %s\n",
+		fmt.Fprintf(stderr, "[%d/%d] %s   %s   %s\n",
 			task.Index, opts.TotalTasks, task.Command, durationStr, statusIndicator)
 
 		if stdoutBuf.Len() > 0 && !opts.Silent {
-			fmt.Fprintf(os.Stderr, "      stdout: %s", stdoutBuf.String())
+			fmt.Fprintf(stderr, "      stdout: %s", stdoutBuf.String())
 			if stdoutBuf.Bytes()[stdoutBuf.Len()-1] != '\n' {
-				fmt.Fprintln(os.Stderr)
+				fmt.Fprintln(stderr)
 			}
 		}
 
 		if stderrBuf.Len() > 0 && !opts.Silent {
-			fmt.Fprintf(os.Stderr, "      stderr: %s", stderrBuf.String())
+			fmt.Fprintf(stderr, "      stderr: %s", stderrBuf.String())
 			if stderrBuf.Bytes()[stderrBuf.Len()-1] != '\n' {
-				fmt.Fprintln(os.Stderr)
+				fmt.Fprintln(stderr)
 			}
 		}
 
-		fmt.Fprintln(os.Stderr) // separator for readability
+		fmt.Fprintln(stderr) // separator for readability
 	}
 
 	return err
@@ -161,11 +176,16 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 	defer outputMu.Unlock()
 
 	// Print summary to stderr
+	stderr := opts.Stderr
+	if stderr == nil {
+		stderr = os.Stderr
+	}
+
 	if totalExecs > 0 {
-		fmt.Fprintf(os.Stderr, "Completed %d executions in %.3fs\n", totalExecs, poolDuration.Seconds())
-		fmt.Fprintf(os.Stderr, "Success: %d   Failed: %d\n", successCount.Load(), failCount.Load())
+		fmt.Fprintf(stderr, "Completed %d executions in %.3fs\n", totalExecs, poolDuration.Seconds())
+		fmt.Fprintf(stderr, "Success: %d   Failed: %d\n", successCount.Load(), failCount.Load())
 		if rate > 0 {
-			fmt.Fprintf(os.Stderr, "Rate: ~%.1f executions/sec\n", rate)
+			fmt.Fprintf(stderr, "Rate: ~%.1f executions/sec\n", rate)
 		}
 	}
 

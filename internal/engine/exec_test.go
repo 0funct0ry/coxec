@@ -1,6 +1,8 @@
 package engine_test
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,5 +93,54 @@ func TestRunShellCommand_Env(t *testing.T) {
 	err := engine.RunJobPool(1, tasks, opts)
 	if err != nil {
 		t.Fatalf("expected COXEC_INDEX to be 42, got error: %v", err)
+	}
+}
+
+func TestRunShellCommand_Silent(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	opts := engine.ExecOptions{
+		Silent:     true,
+		TotalTasks: 1,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	}
+	task := engine.Task{Index: 1, Command: "echo 'hello world'"}
+
+	err := engine.RunShellCommand(task, opts)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if stdout.Len() > 0 {
+		t.Errorf("expected no stdout, got %q", stdout.String())
+	}
+}
+
+func TestRunShellCommand_VerboseSilent(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	opts := engine.ExecOptions{
+		Verbose:    true,
+		Silent:     true,
+		TotalTasks: 1,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	}
+	task := engine.Task{Index: 1, Command: "echo 'hello world'"}
+
+	err := engine.RunShellCommand(task, opts)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if stdout.Len() > 0 {
+		t.Errorf("expected no stdout, got %q", stdout.String())
+	}
+
+	stderrOut := stderr.String()
+	if !strings.Contains(stderrOut, "[1/1] echo 'hello world'") {
+		t.Errorf("expected verbose metadata in stderr, got %q", stderrOut)
+	}
+	if strings.Contains(stderrOut, "stdout: hello world") {
+		t.Errorf("expected no command output in stderr, got %q", stderrOut)
 	}
 }

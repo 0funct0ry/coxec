@@ -60,7 +60,7 @@ func validateExecutionSource(executeCmd, fileFlag, templateFlag string) error {
 var rootCmd = &cobra.Command{
 	Use:   "coxec",
 	Short: "A swiss army knife for concurrent execution",
-	Long:  `coxec is a CLI tool and server for concurrent execution, providing templates, built-in clients, timing control, and structured output.
+	Long: `coxec is a CLI tool and server for concurrent execution, providing templates, built-in clients, timing control, and structured output.
 
 Execution source (exactly one required):
   -e, --exec string      Shell command or built-in to execute repeatedly
@@ -69,6 +69,7 @@ Execution source (exactly one required):
 
 By default: only command stdout appears on stdout; summary and diagnostics go to stderr.
 Use -v / --verbose to see detailed per-execution information on stderr.
+Use --silent to suppress all output from executed commands.
 Use 2>/dev/null or redirect stderr to hide the summary.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		versionFlag, _ := cmd.Flags().GetBool("version")
@@ -118,7 +119,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			}
 
 			tasks := make(chan engine.Task, actualConcurrency)
-			
+
 			go func() {
 				for i := 0; i < iterations; i++ {
 					tasks <- engine.Task{Index: i + 1, Command: executeCmd}
@@ -133,7 +134,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				Verbose:    verboseFlag,
 				Silent:     silentFlag,
 				TotalTasks: iterations,
-				Context:    ctx,
+				Context:    ctx, Stdout: os.Stdout, Stderr: os.Stderr,
 			}
 
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
@@ -174,7 +175,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				Verbose:    verboseFlag,
 				Silent:     silentFlag,
 				TotalTasks: iterations,
-				Context:    ctx,
+				Context:    ctx, Stdout: os.Stdout, Stderr: os.Stderr,
 			}
 
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
