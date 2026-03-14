@@ -120,15 +120,20 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 
 			tasks := make(chan engine.Task, actualConcurrency)
 
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+
 			go func() {
 				for i := 0; i < iterations; i++ {
-					tasks <- engine.Task{Index: i + 1, Command: executeCmd}
+					select {
+					case <-ctx.Done():
+						close(tasks)
+						return
+					case tasks <- engine.Task{Index: i + 1, Command: executeCmd}:
+					}
 				}
 				close(tasks)
 			}()
-
-			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-			defer cancel()
 
 			opts := engine.ExecOptions{
 				Verbose:    verboseFlag,
@@ -161,15 +166,20 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			}
 
 			tasks := make(chan engine.Task, actualConcurrency)
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+
 			go func() {
 				for i := 0; i < iterations; i++ {
-					tasks <- engine.Task{Index: i + 1, Command: string(scriptContent)}
+					select {
+					case <-ctx.Done():
+						close(tasks)
+						return
+					case tasks <- engine.Task{Index: i + 1, Command: string(scriptContent)}:
+					}
 				}
 				close(tasks)
 			}()
-
-			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-			defer cancel()
 
 			opts := engine.ExecOptions{
 				Verbose:    verboseFlag,

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -58,12 +59,11 @@ func RunShellCommand(task Task, opts ExecOptions) error {
 		stderr = os.Stderr
 	}
 
-	var cmd *exec.Cmd
-	if opts.Context != nil {
-		cmd = exec.CommandContext(opts.Context, "sh", "-c", task.Command)
-	} else {
-		cmd = exec.Command("sh", "-c", task.Command)
-	}
+	// We do NOT use opts.Context here (which might be a cancellation context from SIGINT)
+	// because the requirement is to allow already running executions to finish.
+	// We also put the child in its own process group to isolate it from terminal SIGINT.
+	cmd := exec.Command("sh", "-c", task.Command)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	cmd.Env = append(os.Environ(), fmt.Sprintf("COXEC_INDEX=%d", task.Index))
 
