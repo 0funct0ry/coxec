@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"os"
+	"strings"
 	"text/template"
 )
 
@@ -40,7 +41,9 @@ func renderTemplate(name string, tpl string, data IterationData) (string, error)
 		return "", nil
 	}
 
-	t, err := template.New(name).Parse(tpl)
+	t, err := template.New(name).Funcs(template.FuncMap{
+		"quote": shellQuote,
+	}).Parse(tpl)
 	if err != nil {
 		return "", err
 	}
@@ -51,4 +54,13 @@ func renderTemplate(name string, tpl string, data IterationData) (string, error)
 	}
 
 	return buf.String(), nil
+}
+
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	// Wrap in single quotes, and escape existing single quotes
+	// ' becomes '\''
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }

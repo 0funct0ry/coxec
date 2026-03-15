@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/0funct0ry/coxec/internal/engine"
@@ -85,7 +86,11 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 		templateFlag, _ := cmd.Flags().GetString("template")
 		concurrency, _ := cmd.Flags().GetInt("concurrency")
 		iterations, _ := cmd.Flags().GetInt("iterations")
-		userVars, _ := cmd.Flags().GetStringToString("var")
+		userVarsRaw, _ := cmd.Flags().GetStringArray("var")
+		userVars, err := parseUserVars(userVarsRaw)
+		if err != nil {
+			return err
+		}
 
 		if !cmd.Flags().Changed("iterations") {
 			iterations = concurrency
@@ -254,7 +259,7 @@ func init() {
 	rootCmd.Flags().StringP("template", "t", "", "Path to Go template file defining the execution plan")
 	rootCmd.Flags().IntP("concurrency", "c", 1, "Number of concurrent executions")
 	rootCmd.Flags().IntP("iterations", "n", -1, "Total number of executions (defaults to concurrency)")
-	rootCmd.Flags().StringToString("var", nil, "Set user variables (key=value)")
+	rootCmd.Flags().StringArray("var", nil, "Set user variables (key=value)")
 }
 
 // Execute runs the root command
@@ -274,4 +279,19 @@ func Execute() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(10)
 	}
+}
+
+func parseUserVars(vars []string) (map[string]string, error) {
+	result := make(map[string]string)
+	for _, v := range vars {
+		parts := strings.SplitN(v, "=", 2)
+		if len(parts) != 2 {
+			return nil, &ValidationError{
+				Code: validationExitCode,
+				Msg:  fmt.Sprintf("Error: invalid variable format '%s'. Must be key=value", v),
+			}
+		}
+		result[parts[0]] = parts[1]
+	}
+	return result, nil
 }

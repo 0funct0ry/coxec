@@ -165,6 +165,51 @@ func TestRunShellCommand_TemplateContext(t *testing.T) {
 	}
 }
 
+func TestRunShellCommand_UserVarsWithCommas(t *testing.T) {
+	var stdout bytes.Buffer
+	opts := engine.ExecOptions{
+		TotalTasks: 1,
+		Stdout:     &stdout,
+		UserVars: map[string]string{
+			"filter": "status=active,priority>=3",
+		},
+	}
+	task := engine.Task{Index: 1, Command: "echo {{.Var \"filter\" | quote}}"}
+
+	err := engine.RunShellCommand(task, opts)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	expected := "status=active,priority>=3\n"
+	if stdout.String() != expected {
+		t.Errorf("expected %q, got %q", expected, stdout.String())
+	}
+}
+
+func TestRunShellCommand_QuoteInjection(t *testing.T) {
+	var stdout bytes.Buffer
+	opts := engine.ExecOptions{
+		TotalTasks: 1,
+		Stdout:     &stdout,
+		UserVars: map[string]string{
+			"payload": "'; rm -rf /; '",
+		},
+	}
+	task := engine.Task{Index: 1, Command: "echo {{.Var \"payload\" | quote}}"}
+
+	err := engine.RunShellCommand(task, opts)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	// The output should be the literal string, safely quoted for sh -c
+	expected := "'; rm -rf /; '\n"
+	if stdout.String() != expected {
+		t.Errorf("expected %q, got %q", expected, stdout.String())
+	}
+}
+
 func TestRunShellCommand_AdvancedContext(t *testing.T) {
 	var stdout bytes.Buffer
 	opts := engine.ExecOptions{
