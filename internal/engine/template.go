@@ -7,8 +7,13 @@ import (
 
 // IterationData holds the data available to the command templates
 type IterationData struct {
-	Iteration int
-	WorkerID  int
+	Iteration     int
+	WorkerID      int
+	Timestamp          string
+	TimestampUnix      int64
+	TimestampUnixMilli int64
+	TimestampUnixNano  int64
+	UUID               string
 }
 
 // renderTemplate parses and executes a Go template string with the provided data

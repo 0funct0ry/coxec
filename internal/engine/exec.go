@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,15 @@ import (
 	"syscall"
 	"time"
 )
+
+// generateUUIDv4 generates a basic v4-compliant UUID string using crypto/rand
+func generateUUIDv4() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+}
 
 var outputMu sync.Mutex
 
@@ -29,9 +39,11 @@ func (e *ExitError) Error() string {
 
 // Task defines a single execution target
 type Task struct {
-	Index    int
-	WorkerID int
-	Command  string
+	Index     int
+	WorkerID  int
+	Command   string
+	Timestamp time.Time
+	UUID      string
 }
 
 // ExecOptions groups behavior flags for the engine
@@ -60,10 +72,27 @@ func RunShellCommand(task Task, opts ExecOptions) error {
 		stderr = os.Stderr
 	}
 
+	// Generate iteration-stable values if not provided
+	if task.Timestamp.IsZero() {
+		task.Timestamp = time.Now()
+	}
+	if task.UUID == "" {
+		task.UUID = generateUUIDv4()
+	}
+
 	// Render command as a template
+	// We use a custom RFC3339 format with millisecond precision to distinguish fast iterations
+	// while still being a valid RFC3339 string.
+	const rfc3339Milli = "2006-01-02T15:04:05.000Z07:00"
+
 	renderedCmd, renderErr := renderTemplate("command", task.Command, IterationData{
-		Iteration: task.Index - 1,
-		WorkerID:  task.WorkerID,
+		Iteration:     task.Index - 1,
+		WorkerID:      task.WorkerID,
+		Timestamp:          task.Timestamp.Format(rfc3339Milli),
+		TimestampUnix:      task.Timestamp.Unix(),
+		TimestampUnixMilli: task.Timestamp.UnixMilli(),
+		TimestampUnixNano:  task.Timestamp.UnixNano(),
+		UUID:               task.UUID,
 	})
 	if renderErr != nil {
 		// If template rendering fails, we don't even try to run the command.
