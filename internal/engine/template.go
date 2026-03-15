@@ -8,6 +8,7 @@ import (
 // IterationData holds the data available to the command templates
 type IterationData struct {
 	Iteration int
+	WorkerID  int
 }
 
 // renderTemplate parses and executes a Go template string with the provided data

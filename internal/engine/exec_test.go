@@ -144,3 +144,22 @@ func TestRunShellCommand_VerboseSilent(t *testing.T) {
 		t.Errorf("expected no command output in stderr, got %q", stderrOut)
 	}
 }
+
+func TestRunShellCommand_TemplateContext(t *testing.T) {
+	var stdout bytes.Buffer
+	opts := engine.ExecOptions{
+		TotalTasks: 1,
+		Stdout:     &stdout,
+	}
+	task := engine.Task{Index: 5, WorkerID: 3, Command: "echo it:{{.Iteration}} wrk:{{.WorkerID}}"}
+
+	err := engine.RunShellCommand(task, opts)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	expected := "it:4 wrk:3\n"
+	if stdout.String() != expected {
+		t.Errorf("expected %q, got %q", expected, stdout.String())
+	}
+}

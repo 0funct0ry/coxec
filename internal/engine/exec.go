@@ -29,8 +29,9 @@ func (e *ExitError) Error() string {
 
 // Task defines a single execution target
 type Task struct {
-	Index   int
-	Command string
+	Index    int
+	WorkerID int
+	Command  string
 }
 
 // ExecOptions groups behavior flags for the engine
@@ -60,7 +61,10 @@ func RunShellCommand(task Task, opts ExecOptions) error {
 	}
 
 	// Render command as a template
-	renderedCmd, renderErr := renderTemplate("command", task.Command, IterationData{Iteration: task.Index})
+	renderedCmd, renderErr := renderTemplate("command", task.Command, IterationData{
+		Iteration: task.Index - 1,
+		WorkerID:  task.WorkerID,
+	})
 	if renderErr != nil {
 		// If template rendering fails, we don't even try to run the command.
 		// We use a dummy command execution or just return the error.
@@ -163,13 +167,15 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
-		go func() {
+		workerID := i
+		go func(id int) {
 			defer wg.Done()
 			for task := range tasks {
 				if opts.Context != nil && opts.Context.Err() != nil {
 					continue
 				}
 
+				task.WorkerID = id
 				if err := RunShellCommand(task, opts); err != nil {
 					failCount.Add(1)
 					errMu.Lock()
@@ -181,7 +187,7 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 					successCount.Add(1)
 				}
 			}
-		}()
+		}(workerID)
 	}
 
 	wg.Wait()
