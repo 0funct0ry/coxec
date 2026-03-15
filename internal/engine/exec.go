@@ -59,10 +59,31 @@ func RunShellCommand(task Task, opts ExecOptions) error {
 		stderr = os.Stderr
 	}
 
+	// Render command as a template
+	renderedCmd, renderErr := renderTemplate("command", task.Command, IterationData{Iteration: task.Index})
+	if renderErr != nil {
+		// If template rendering fails, we don't even try to run the command.
+		// We use a dummy command execution or just return the error.
+		// Returning the error will mark the task as failed in RunJobPool.
+		
+		// Still need to handle silent/verbose/etc if we want to show the error
+		// but RunJobPool will catch it and we can handle it there or if we log it here.
+		// Requirement: "When template rendering fails the error message is shown to the user and the execution of that iteration is marked as failed"
+		
+		outputMu.Lock()
+		if opts.Verbose {
+			fmt.Fprintf(stderr, "[%d/%d] Template error: %v\n\n", task.Index, opts.TotalTasks, renderErr)
+		} else if !opts.Silent {
+			fmt.Fprintf(stderr, "Iteration %d: template error: %v\n", task.Index, renderErr)
+		}
+		outputMu.Unlock()
+		return renderErr
+	}
+
 	// We do NOT use opts.Context here (which might be a cancellation context from SIGINT)
 	// because the requirement is to allow already running executions to finish.
 	// We also put the child in its own process group to isolate it from terminal SIGINT.
-	cmd := exec.Command("sh", "-c", task.Command)
+	cmd := exec.Command("sh", "-c", renderedCmd)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	cmd.Env = append(os.Environ(), fmt.Sprintf("COXEC_INDEX=%d", task.Index))

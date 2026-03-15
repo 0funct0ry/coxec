@@ -191,6 +191,52 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
 		}
 
+		if templateFlag != "" {
+			cmd.SilenceUsage = true
+			cmd.SilenceErrors = true
+
+			tplContent, err := os.ReadFile(templateFlag)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					return &ValidationError{
+						Code: validationExitCode,
+						Msg:  fmt.Sprintf("Error: template file not found: %s", templateFlag),
+					}
+				}
+				return fmt.Errorf("Error: failed to read template file %s: %w", templateFlag, err)
+			}
+
+			actualConcurrency := concurrency
+			if iterations < concurrency {
+				actualConcurrency = iterations
+			}
+
+			tasks := make(chan engine.Task, actualConcurrency)
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+
+			go func() {
+				for i := 0; i < iterations; i++ {
+					select {
+					case <-ctx.Done():
+						close(tasks)
+						return
+					case tasks <- engine.Task{Index: i + 1, Command: string(tplContent)}:
+					}
+				}
+				close(tasks)
+			}()
+
+			opts := engine.ExecOptions{
+				Verbose:    verboseFlag,
+				Silent:     silentFlag,
+				TotalTasks: iterations,
+				Context:    ctx, Stdout: os.Stdout, Stderr: os.Stderr,
+			}
+
+			return engine.RunJobPool(actualConcurrency, tasks, opts)
+		}
+
 		return nil
 	},
 }
