@@ -345,3 +345,42 @@ func TestHelpContainsExecutionSource(t *testing.T) {
 		}
 	}
 }
+
+func TestConcurrency(t *testing.T) {
+	// Test runs coxec -c 10 -n 10 -e 'echo $((RANDOM))'
+	cmd := exec.Command(binPath, "-c", "10", "-n", "10", "-e", "echo $((RANDOM))")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+
+	// Test fails if coxec exits with non-zero code
+	if err != nil {
+		t.Fatalf("coxec failed with error: %v. Stderr: %s", err, stderr.String())
+	}
+
+	// Exactly 10 lines appear in captured stdout
+	output := strings.TrimSpace(stdout.String())
+	if output == "" {
+		t.Fatal("stdout is empty")
+	}
+	lines := strings.Split(output, "\n")
+	if len(lines) != 10 {
+		t.Errorf("Expected exactly 10 lines of output, got %d", len(lines))
+	}
+
+	// All lines are different (proves real concurrency happened)
+	seen := make(map[string]bool)
+	for i, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		if seen[trimmedLine] {
+			t.Errorf("Duplicate output found: %q at line %d", trimmedLine, i+1)
+		}
+		seen[trimmedLine] = true
+	}
+
+	if len(seen) != 10 {
+		t.Errorf("Expected 10 unique lines, got %d", len(seen))
+	}
+}
