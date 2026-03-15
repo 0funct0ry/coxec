@@ -55,6 +55,7 @@ type ExecOptions struct {
 	Stdout     interface {
 		Write([]byte) (int, error)
 	}
+	UserVars   map[string]string
 	Stderr interface {
 		Write([]byte) (int, error)
 	}
@@ -93,6 +94,7 @@ func RunShellCommand(task Task, opts ExecOptions) error {
 		TimestampUnixMilli: task.Timestamp.UnixMilli(),
 		TimestampUnixNano:  task.Timestamp.UnixNano(),
 		UUID:               task.UUID,
+		UserVars:           opts.UserVars,
 	})
 	if renderErr != nil {
 		// If template rendering fails, we don't even try to run the command.

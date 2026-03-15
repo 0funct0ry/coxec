@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"os"
 	"text/template"
 )
 
@@ -14,6 +15,23 @@ type IterationData struct {
 	TimestampUnixMilli int64
 	TimestampUnixNano  int64
 	UUID               string
+	UserVars           map[string]string
+}
+
+// Env returns the value of an environment variable.
+// Returns an empty string if the variable is not set.
+func (d IterationData) Env(key string) string {
+	return os.Getenv(key)
+}
+
+// Var returns the value of a user-provided variable from --var.
+// If the variable is not found in UserVars, it falls back to environment variables.
+// Returns an empty string if the variable is not set.
+func (d IterationData) Var(key string) string {
+	if val, ok := d.UserVars[key]; ok {
+		return val
+	}
+	return os.Getenv(key)
 }
 
 // renderTemplate parses and executes a Go template string with the provided data

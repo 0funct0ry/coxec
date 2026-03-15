@@ -85,6 +85,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 		templateFlag, _ := cmd.Flags().GetString("template")
 		concurrency, _ := cmd.Flags().GetInt("concurrency")
 		iterations, _ := cmd.Flags().GetInt("iterations")
+		userVars, _ := cmd.Flags().GetStringToString("var")
 
 		if !cmd.Flags().Changed("iterations") {
 			iterations = concurrency
@@ -140,6 +141,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				Silent:     silentFlag,
 				TotalTasks: iterations,
 				Context:    ctx, Stdout: os.Stdout, Stderr: os.Stderr,
+				UserVars:   userVars,
 			}
 
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
@@ -186,6 +188,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				Silent:     silentFlag,
 				TotalTasks: iterations,
 				Context:    ctx, Stdout: os.Stdout, Stderr: os.Stderr,
+				UserVars:   userVars,
 			}
 
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
@@ -232,6 +235,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				Silent:     silentFlag,
 				TotalTasks: iterations,
 				Context:    ctx, Stdout: os.Stdout, Stderr: os.Stderr,
+				UserVars:   userVars,
 			}
 
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
@@ -250,6 +254,7 @@ func init() {
 	rootCmd.Flags().StringP("template", "t", "", "Path to Go template file defining the execution plan")
 	rootCmd.Flags().IntP("concurrency", "c", 1, "Number of concurrent executions")
 	rootCmd.Flags().IntP("iterations", "n", -1, "Total number of executions (defaults to concurrency)")
+	rootCmd.Flags().StringToString("var", nil, "Set user variables (key=value)")
 }
 
 // Execute runs the root command
