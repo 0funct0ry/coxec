@@ -107,7 +107,7 @@ func TestRunShellCommand_Silent(t *testing.T) {
 	}
 	task := engine.Task{Index: 1, Command: "echo 'hello world'"}
 
-	err := engine.RunShellCommand(task, opts)
+	err := engine.RunPipeline(task, opts)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -128,7 +128,7 @@ func TestRunShellCommand_VerboseSilent(t *testing.T) {
 	}
 	task := engine.Task{Index: 1, Command: "echo 'hello world'"}
 
-	err := engine.RunShellCommand(task, opts)
+	err := engine.RunPipeline(task, opts)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -154,7 +154,7 @@ func TestRunShellCommand_TemplateContext(t *testing.T) {
 	}
 	task := engine.Task{Index: 5, WorkerID: 3, Command: "echo it:{{.Iteration}} wrk:{{.WorkerID}}"}
 
-	err := engine.RunShellCommand(task, opts)
+	err := engine.RunPipeline(task, opts)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -176,7 +176,7 @@ func TestRunShellCommand_UserVarsWithCommas(t *testing.T) {
 	}
 	task := engine.Task{Index: 1, Command: "echo {{.Var \"filter\" | quote}}"}
 
-	err := engine.RunShellCommand(task, opts)
+	err := engine.RunPipeline(task, opts)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -198,7 +198,7 @@ func TestRunShellCommand_QuoteInjection(t *testing.T) {
 	}
 	task := engine.Task{Index: 1, Command: "echo {{.Var \"payload\" | quote}}"}
 
-	err := engine.RunShellCommand(task, opts)
+	err := engine.RunPipeline(task, opts)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -226,7 +226,7 @@ func TestRunShellCommand_AdvancedContext(t *testing.T) {
 		UUID:      uuid,
 	}
 
-	err := engine.RunShellCommand(task, opts)
+	err := engine.RunPipeline(task, opts)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -271,7 +271,7 @@ func TestRunShellCommand_ImplicitGeneration(t *testing.T) {
 		Command: "echo ts:{{.Timestamp}} uuid:{{.UUID}}",
 	}
 
-	err := engine.RunShellCommand(task, opts)
+	err := engine.RunPipeline(task, opts)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}

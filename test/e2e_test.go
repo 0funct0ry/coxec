@@ -57,8 +57,8 @@ func TestSingleShellCommand(t *testing.T) {
 		{
 			name:           "Missing execution flags",
 			args:           []string{}, // no flags
-			expectedStderr: "No execution source specified. Use one of -e, -f, or -t",
-			expectedExit:   64,
+			expectedStderr: "Error: No execution source specified. Use one of -e, -f, or -t",
+			expectedExit:   3,
 		},
 		{
 			name:         "All commands fail",
@@ -199,8 +199,8 @@ func TestFileFlag_FileNotFound(t *testing.T) {
 			exitCode = ee.ExitCode()
 		}
 	}
-	if exitCode != 64 {
-		t.Errorf("Expected exit 64, got %d", exitCode)
+	if exitCode != 3 {
+		t.Errorf("Expected exit 3, got %d", exitCode)
 	}
 }
 
@@ -277,20 +277,20 @@ func TestExecutionSourceRule_MutualExclusivity(t *testing.T) {
 		{
 			name:         "-e and -f",
 			args:         []string{"-e", "echo x", "-f", scriptPath, "-n", "1"},
-			wantStderr:   "cannot use both -e / --exec and -f / --file at the same time",
-			expectedExit: 64,
+			wantStderr:   "Error: flags -e and -f are mutually exclusive",
+			expectedExit: 3,
 		},
 		{
 			name:         "-e and -t",
 			args:         []string{"-e", "echo x", "-t", "/tmp/t.tpl", "-n", "1"},
-			wantStderr:   "cannot use both -e / --exec and -t / --template at the same time",
-			expectedExit: 64,
+			wantStderr:   "Error: flags -e and -t are mutually exclusive",
+			expectedExit: 3,
 		},
 		{
 			name:         "-f and -t",
 			args:         []string{"-f", scriptPath, "-t", "/tmp/t.tpl", "-n", "1"},
-			wantStderr:   "cannot use both -f / --file and -t / --template at the same time",
-			expectedExit: 64,
+			wantStderr:   "Error: flags -f and -t are mutually exclusive",
+			expectedExit: 3,
 		},
 	}
 
@@ -304,9 +304,6 @@ func TestExecutionSourceRule_MutualExclusivity(t *testing.T) {
 			got := stderr.String()
 			if !strings.Contains(got, tc.wantStderr) {
 				t.Errorf("Expected stderr to contain %q, got %q", tc.wantStderr, got)
-			}
-			if !strings.Contains(got, "Only one execution source is allowed.") {
-				t.Errorf("Expected 'Only one execution source is allowed.' in stderr, got %q", got)
 			}
 
 			exitCode := 0

@@ -9,14 +9,15 @@ import (
 
 // IterationData holds the data available to the command templates
 type IterationData struct {
-	Iteration     int
-	WorkerID      int
+	Iteration          int
+	WorkerID           int
 	Timestamp          string
 	TimestampUnix      int64
 	TimestampUnixMilli int64
 	TimestampUnixNano  int64
 	UUID               string
 	UserVars           map[string]string
+	Prev               *Result // Previous pipeline step result
 }
 
 // Env returns the value of an environment variable.
@@ -33,6 +34,15 @@ func (d IterationData) Var(key string) string {
 		return val
 	}
 	return os.Getenv(key)
+}
+
+// ValidateTemplate parses a template string to check for syntax errors.
+// It returns a descriptive error if parsing fails.
+func ValidateTemplate(name, tpl string) error {
+	_, err := template.New(name).Funcs(template.FuncMap{
+		"quote": shellQuote,
+	}).Parse(tpl)
+	return err
 }
 
 // renderTemplate parses and executes a Go template string with the provided data

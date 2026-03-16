@@ -17,7 +17,7 @@ import (
 // Version string populated at build time
 var Version = "dev"
 
-const validationExitCode = 64
+const validationExitCode = 3
 
 func validateExecutionSource(executeCmd, fileFlag, templateFlag string) error {
 	hasExec := executeCmd != ""
@@ -36,24 +36,30 @@ func validateExecutionSource(executeCmd, fileFlag, templateFlag string) error {
 
 	if count == 0 {
 		return &ValidationError{
-			Code: validationExitCode,
-			Msg:  "Error: No execution source specified. Use one of -e, -f, or -t",
+			ExitCode:   validationExitCode,
+			ID:         "INVALID_ARGS",
+			Message:    "No execution source specified. Use one of -e, -f, or -t",
+			Suggestion: "use -e for inline commands, -f for shell scripts, or -t for template files",
 		}
 	}
 	if count >= 2 {
-		msg := "Error: "
+		msg := ""
+		suggestion := ""
 		switch {
 		case hasExec && hasFile:
-			msg += "cannot use both -e / --exec and -f / --file at the same time"
+			msg = "flags -e and -f are mutually exclusive"
+			suggestion = "use -e for inline commands or -f for shell scripts, not both"
 		case hasExec && hasTemplate:
-			msg += "cannot use both -e / --exec and -t / --template at the same time"
+			msg = "flags -e and -t are mutually exclusive"
+			suggestion = "use -e for inline commands or -t for template files, not both"
 		case hasFile && hasTemplate:
-			msg += "cannot use both -f / --file and -t / --template at the same time"
+			msg = "flags -f and -t are mutually exclusive"
+			suggestion = "use -f for shell scripts or -t for template files, not both"
 		default:
-			msg += "cannot use -e, -f, and -t at the same time"
+			msg = "flags -e, -f, and -t are mutually exclusive"
+			suggestion = "use exactly one execution source flag"
 		}
-		msg += "\nOnly one execution source is allowed."
-		return &ValidationError{Code: validationExitCode, Msg: msg}
+		return &ValidationError{ExitCode: validationExitCode, ID: "INVALID_ARGS", Message: msg, Suggestion: suggestion}
 	}
 	return nil
 }
@@ -72,6 +78,8 @@ By default: only command stdout appears on stdout; summary and diagnostics go to
 Use -v / --verbose to see detailed per-execution information on stderr.
 Use --silent to suppress all output from executed commands.
 Use 2>/dev/null or redirect stderr to hide the summary.`,
+	SilenceUsage:  true,
+	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		versionFlag, _ := cmd.Flags().GetBool("version")
 		verboseFlag, _ := cmd.Flags().GetBool("verbose")
@@ -113,6 +121,9 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			return fmt.Errorf("iterations (-n) must be greater than or equal to 0")
 		}
 
+		registry := engine.NewBuiltinRegistry()
+		// Future built-ins will be registered here
+
 		if executeCmd != "" {
 			// Disable printing usage to avoid cluttering stderr on command failure
 			cmd.SilenceUsage = true
@@ -146,7 +157,8 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				Silent:     silentFlag,
 				TotalTasks: iterations,
 				Context:    ctx, Stdout: os.Stdout, Stderr: os.Stderr,
-				UserVars:   userVars,
+				UserVars: userVars,
+				Registry: registry,
 			}
 
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
@@ -160,8 +172,18 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
 					return &ValidationError{
-						Code: validationExitCode,
-						Msg:  fmt.Sprintf("Error: script file not found: %s", fileFlag),
+						ExitCode:   validationExitCode,
+						ID:         "FILE_NOT_FOUND",
+						Message:    fmt.Sprintf("script file not found: %s", fileFlag),
+						Suggestion: "check the file path; it is resolved relative to the current working directory",
+					}
+				}
+				if errors.Is(err, os.ErrPermission) {
+					return &ValidationError{
+						ExitCode:   validationExitCode,
+						ID:         "FILE_READ_ERROR",
+						Message:    fmt.Sprintf("cannot read script file %s: permission denied", fileFlag),
+						Suggestion: "check file permissions",
 					}
 				}
 				return fmt.Errorf("Error: failed to read script file %s: %w", fileFlag, err)
@@ -193,7 +215,8 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				Silent:     silentFlag,
 				TotalTasks: iterations,
 				Context:    ctx, Stdout: os.Stdout, Stderr: os.Stderr,
-				UserVars:   userVars,
+				UserVars: userVars,
+				Registry: registry,
 			}
 
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
@@ -207,11 +230,44 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
 					return &ValidationError{
-						Code: validationExitCode,
-						Msg:  fmt.Sprintf("Error: template file not found: %s", templateFlag),
+						ExitCode:   validationExitCode,
+						ID:         "FILE_NOT_FOUND",
+						Message:    fmt.Sprintf("template file not found: %s", templateFlag),
+						Suggestion: "check the file path; it is resolved relative to the current working directory",
+					}
+				}
+				if errors.Is(err, os.ErrPermission) {
+					return &ValidationError{
+						ExitCode:   validationExitCode,
+						ID:         "FILE_READ_ERROR",
+						Message:    fmt.Sprintf("cannot read template file %s: permission denied", templateFlag),
+						Suggestion: "check file permissions",
 					}
 				}
 				return fmt.Errorf("Error: failed to read template file %s: %w", templateFlag, err)
+			}
+
+			tplStr := string(tplContent)
+			if strings.TrimSpace(tplStr) == "" {
+				return &ValidationError{
+					ExitCode:   validationExitCode,
+					ID:         "EMPTY_TEMPLATE",
+					Message:    fmt.Sprintf("template file rendered to empty string: %s", templateFlag),
+					Suggestion: "the file may contain only template comments or whitespace-trimming markers",
+				}
+			}
+
+			// The template itself defines the execution plan, so we don't just pass tplContent as a command.
+			// Instead, we will pass the template string to the engine to parse and execute.
+			// The engine will then generate the actual commands/pipelines.
+			// For now, we'll just validate the template. The actual execution logic will be more complex.
+			if err := engine.ValidateTemplate("plan", tplStr); err != nil {
+				return &ValidationError{
+					ExitCode:   validationExitCode,
+					ID:         "INVALID_TEMPLATE",
+					Message:    fmt.Sprintf("template parse error: %v", err),
+					Suggestion: "check template syntax",
+				}
 			}
 
 			actualConcurrency := concurrency
@@ -240,7 +296,8 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				Silent:     silentFlag,
 				TotalTasks: iterations,
 				Context:    ctx, Stdout: os.Stdout, Stderr: os.Stderr,
-				UserVars:   userVars,
+				UserVars: userVars,
+				Registry: registry,
 			}
 
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
@@ -260,14 +317,22 @@ func init() {
 	rootCmd.Flags().IntP("concurrency", "c", 1, "Number of concurrent executions")
 	rootCmd.Flags().IntP("iterations", "n", -1, "Total number of executions (defaults to concurrency)")
 	rootCmd.Flags().StringArray("var", nil, "Set user variables (key=value)")
+	rootCmd.Flags().Bool("json", false, "Output validation errors as JSON")
 }
 
 // Execute runs the root command
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
+		jsonFlag, _ := rootCmd.Flags().GetBool("json")
 		if ve, ok := err.(*ValidationError); ok {
-			fmt.Fprintln(os.Stderr, ve.Msg)
-			os.Exit(ve.Code)
+			if jsonFlag {
+				fmt.Fprintln(os.Stderr, ve.JSON())
+			} else {
+				fmt.Fprintln(os.Stderr, ve.String())
+				fmt.Fprintln(os.Stderr)
+				rootCmd.Usage()
+			}
+			os.Exit(ve.ExitCode)
 		}
 		if exitErr, ok := err.(*engine.ExitError); ok {
 			os.Exit(exitErr.Code)
@@ -287,8 +352,10 @@ func parseUserVars(vars []string) (map[string]string, error) {
 		parts := strings.SplitN(v, "=", 2)
 		if len(parts) != 2 {
 			return nil, &ValidationError{
-				Code: validationExitCode,
-				Msg:  fmt.Sprintf("Error: invalid variable format '%s'. Must be key=value", v),
+				ExitCode:   validationExitCode,
+				ID:         "INVALID_ARGS",
+				Message:    fmt.Sprintf("invalid variable format '%s'. Must be key=value", v),
+				Suggestion: "ensure variables are provided as key=value",
 			}
 		}
 		result[parts[0]] = parts[1]

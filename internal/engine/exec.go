@@ -59,21 +59,18 @@ type ExecOptions struct {
 	Stderr interface {
 		Write([]byte) (int, error)
 	}
+	Registry *BuiltinRegistry
 }
 
-// RunShellCommand executes a single command in the default shell
-// Captures output and handles printing based on ExecOptions
-func RunShellCommand(task Task, opts ExecOptions) error {
-	stdout := opts.Stdout
-	if stdout == nil {
-		stdout = os.Stdout
+// RunPipeline executes a series of pipeline steps
+func RunPipeline(task Task, opts ExecOptions) error {
+	if opts.Stdout == nil {
+		opts.Stdout = os.Stdout
 	}
-	stderr := opts.Stderr
-	if stderr == nil {
-		stderr = os.Stderr
+	if opts.Stderr == nil {
+		opts.Stderr = os.Stderr
 	}
 
-	// Generate iteration-stable values if not provided
 	if task.Timestamp.IsZero() {
 		task.Timestamp = time.Now()
 	}
@@ -81,47 +78,75 @@ func RunShellCommand(task Task, opts ExecOptions) error {
 		task.UUID = generateUUIDv4()
 	}
 
-	// Render command as a template
-	// We use a custom RFC3339 format with millisecond precision to distinguish fast iterations
-	// while still being a valid RFC3339 string.
 	const rfc3339Milli = "2006-01-02T15:04:05.000Z07:00"
 
-	renderedCmd, renderErr := renderTemplate("command", task.Command, IterationData{
-		Iteration:     task.Index - 1,
-		WorkerID:      task.WorkerID,
-		Timestamp:          task.Timestamp.Format(rfc3339Milli),
-		TimestampUnix:      task.Timestamp.Unix(),
-		TimestampUnixMilli: task.Timestamp.UnixMilli(),
-		TimestampUnixNano:  task.Timestamp.UnixNano(),
-		UUID:               task.UUID,
-		UserVars:           opts.UserVars,
-	})
-	if renderErr != nil {
-		// If template rendering fails, we don't even try to run the command.
-		// We use a dummy command execution or just return the error.
-		// Returning the error will mark the task as failed in RunJobPool.
-		
-		// Still need to handle silent/verbose/etc if we want to show the error
-		// but RunJobPool will catch it and we can handle it there or if we log it here.
-		// Requirement: "When template rendering fails the error message is shown to the user and the execution of that iteration is marked as failed"
-		
-		outputMu.Lock()
-		if opts.Verbose {
-			fmt.Fprintf(stderr, "[%d/%d] Template error: %v\n\n", task.Index, opts.TotalTasks, renderErr)
-		} else if !opts.Silent {
-			fmt.Fprintf(stderr, "Iteration %d: template error: %v\n", task.Index, renderErr)
-		}
-		outputMu.Unlock()
-		return renderErr
+	steps := SplitPipeline(task.Command)
+	if len(steps) == 0 {
+		return nil // Should be caught by EMPTY_TEMPLATE validation earlier but safe to handle
 	}
 
-	// We do NOT use opts.Context here (which might be a cancellation context from SIGINT)
-	// because the requirement is to allow already running executions to finish.
-	// We also put the child in its own process group to isolate it from terminal SIGINT.
-	cmd := exec.Command("sh", "-c", renderedCmd)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var prevResult *Result
+	for _, stepTmpl := range steps {
+		renderedStep, renderErr := renderTemplate("step", stepTmpl, IterationData{
+			Iteration:          task.Index - 1,
+			WorkerID:           task.WorkerID,
+			Timestamp:          task.Timestamp.Format(rfc3339Milli),
+			TimestampUnix:      task.Timestamp.Unix(),
+			TimestampUnixMilli: task.Timestamp.UnixMilli(),
+			TimestampUnixNano:  task.Timestamp.UnixNano(),
+			UUID:               task.UUID,
+			UserVars:           opts.UserVars,
+			Prev:               prevResult,
+		})
 
-	cmd.Env = append(os.Environ(), fmt.Sprintf("COXEC_INDEX=%d", task.Index))
+		if renderErr != nil {
+			outputMu.Lock()
+			if opts.Verbose {
+				fmt.Fprintf(opts.Stderr, "[%d/%d] Template error: %v\n\n", task.Index, opts.TotalTasks, renderErr)
+			} else if !opts.Silent {
+				fmt.Fprintf(opts.Stderr, "Iteration %d: template error: %v\n", task.Index, renderErr)
+			}
+			outputMu.Unlock()
+			return renderErr
+		}
+
+		if renderedStep == "" {
+			continue
+		}
+
+		cmdName, args := ParseCommand(renderedStep)
+		var currentResult *Result
+		var err error
+
+		if opts.Registry != nil {
+			if builtin, ok := opts.Registry.Get(cmdName); ok {
+				currentResult, err = builtin.Execute(opts.Context, args, IterationData{
+					Iteration: task.Index - 1,
+					WorkerID:  task.WorkerID,
+					UserVars:  opts.UserVars,
+					Prev:      prevResult,
+				})
+			}
+		}
+
+		if currentResult == nil {
+			// Fall through to shell
+			currentResult, err = runShellStep(renderedStep, opts, task.Index)
+		}
+
+		if err != nil {
+			return err
+		}
+		prevResult = currentResult
+	}
+
+	return nil
+}
+
+func runShellStep(command string, opts ExecOptions, taskIndex int) (*Result, error) {
+	cmd := exec.Command("sh", "-c", command)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Env = append(os.Environ(), fmt.Sprintf("COXEC_INDEX=%d", taskIndex))
 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
@@ -141,48 +166,43 @@ func RunShellCommand(task Task, opts ExecOptions) error {
 	}
 
 	outputMu.Lock()
-	defer outputMu.Unlock()
-
-	// 1. Silent flag: only suppress child stdout if silent is true.
 	if !opts.Silent {
 		if stdoutBuf.Len() > 0 {
-			stdout.Write(stdoutBuf.Bytes())
+			opts.Stdout.Write(stdoutBuf.Bytes())
 		}
 	}
 
-	// 2. Verbose block on stderr
 	if opts.Verbose {
 		statusIndicator := "✓ exit 0"
 		if exitCode != 0 {
 			statusIndicator = fmt.Sprintf("✗ exit %d", exitCode)
 		}
-
 		durationStr := duration.Round(time.Millisecond).String()
-		if duration < time.Millisecond {
-			durationStr = duration.Round(time.Microsecond).String()
-		}
-
-		fmt.Fprintf(stderr, "[%d/%d] %s   %s   %s\n",
-			task.Index, opts.TotalTasks, task.Command, durationStr, statusIndicator)
-
+		fmt.Fprintf(opts.Stderr, "[%d/%d] %s   %s   %s\n",
+			taskIndex, opts.TotalTasks, command, durationStr, statusIndicator)
+		
 		if stdoutBuf.Len() > 0 && !opts.Silent {
-			fmt.Fprintf(stderr, "      stdout: %s", stdoutBuf.String())
+			fmt.Fprintf(opts.Stderr, "      stdout: %s", stdoutBuf.String())
 			if stdoutBuf.Bytes()[stdoutBuf.Len()-1] != '\n' {
-				fmt.Fprintln(stderr)
+				fmt.Fprintln(opts.Stderr)
 			}
 		}
-
 		if stderrBuf.Len() > 0 && !opts.Silent {
-			fmt.Fprintf(stderr, "      stderr: %s", stderrBuf.String())
+			fmt.Fprintf(opts.Stderr, "      stderr: %s", stderrBuf.String())
 			if stderrBuf.Bytes()[stderrBuf.Len()-1] != '\n' {
-				fmt.Fprintln(stderr)
+				fmt.Fprintln(opts.Stderr)
 			}
 		}
-
-		fmt.Fprintln(stderr) // separator for readability
+		fmt.Fprintln(opts.Stderr)
 	}
+	outputMu.Unlock()
 
-	return err
+	return &Result{
+		Stdout:   stdoutBuf.String(),
+		Stderr:   stderrBuf.String(),
+		ExitCode: exitCode,
+		Latency:  duration.Nanoseconds(),
+	}, err
 }
 
 // RunJobPool executes commands from the tasks channel across a pool of worker goroutines
@@ -207,7 +227,7 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 				}
 
 				task.WorkerID = id
-				if err := RunShellCommand(task, opts); err != nil {
+				if err := RunPipeline(task, opts); err != nil {
 					failCount.Add(1)
 					errMu.Lock()
 					if firstErr == nil {
