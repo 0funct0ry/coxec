@@ -3,10 +3,15 @@ package engine
 import (
 	"bufio"
 	"bytes"
+	crypto_hmac "crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/oklog/ulid/v2"
 	"math/rand/v2"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -98,6 +103,14 @@ func funcMap(data IterationData, state *TemplateState) template.FuncMap {
 		"counter":    func(name string) int64 { return counter(name, state) },
 		"fileLine":   func(filename string) string { return fileLine(filename, state) },
 		"fileLineAt": func(filename string, index int) string { return fileLineAt(filename, index, state) },
+		// Encoding & crypto
+		"jsonEncode": jsonEncodeFunc,
+		"base64Enc":  base64EncFunc,
+		"base64Dec":  base64DecFunc,
+		"sha256":     sha256Func,
+		"hmac":       hmacFunc,
+		"urlEncode":  urlEncodeFunc,
+		"toJSON":     toJSONFunc,
 	}
 }
 
@@ -258,4 +271,64 @@ func randEmail() string {
 // randPhone returns a phone number in common international format.
 func randPhone() string {
 	return fmt.Sprintf("+1-%03d-%03d-%04d", rand.IntN(900)+100, rand.IntN(900)+100, rand.IntN(10000))
+}
+
+// jsonEncodeFunc JSON-encodes a value and returns the resulting JSON string.
+// If marshalling fails (e.g. a channel), it returns an empty string.
+func jsonEncodeFunc(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// base64EncFunc returns the standard Base64 encoding of s.
+func base64EncFunc(s string) string {
+	return base64.StdEncoding.EncodeToString([]byte(s))
+}
+
+// base64DecFunc decodes a standard Base64-encoded string.
+// Returns an empty string if the input is invalid.
+func base64DecFunc(s string) string {
+	b, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// sha256Func returns the lowercase hex SHA-256 digest of s.
+func sha256Func(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return fmt.Sprintf("%x", sum)
+}
+
+// hmacFunc returns the HMAC digest of msg using key.
+// algo must be "sha256"; unsupported algorithms return an empty string.
+func hmacFunc(algo, key, msg string) string {
+	switch algo {
+	case "sha256":
+		mac := crypto_hmac.New(sha256.New, []byte(key))
+		mac.Write([]byte(msg))
+		return fmt.Sprintf("%x", mac.Sum(nil))
+	default:
+		return ""
+	}
+}
+
+// urlEncodeFunc returns the URL query-escaped form of s.
+// Spaces become '+', and special characters are percent-encoded.
+func urlEncodeFunc(s string) string {
+	return url.QueryEscape(s)
+}
+
+// toJSONFunc returns the JSON representation of v.
+// Returns an empty string if marshalling fails.
+func toJSONFunc(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }

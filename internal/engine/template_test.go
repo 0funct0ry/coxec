@@ -294,3 +294,83 @@ func TestDataFunctions(t *testing.T) {
 		})
 	}
 }
+
+func TestEncodingFunctions(t *testing.T) {
+	tests := []struct {
+		name     string
+		data     IterationData
+		template string
+		expected string
+	}{
+		{
+			name:     "base64Enc hello",
+			template: `{{base64Enc "hello"}}`,
+			expected: "aGVsbG8=",
+		},
+		{
+			name:     "base64Dec aGVsbG8=",
+			template: `{{base64Dec "aGVsbG8="}}`,
+			expected: "hello",
+		},
+		{
+			name:     "base64Dec invalid input returns empty",
+			template: `{{base64Dec "!!!invalid"}}`,
+			expected: "",
+		},
+		{
+			name:     "sha256 secret",
+			template: `{{sha256 "secret"}}`,
+			expected: "2bb80d537b1da3e38bd30361aa855686bde0eacd7162fef6a25fe97bf527a25b",
+		},
+		{
+			name:     "hmac sha256",
+			template: `{{hmac "sha256" "key" "message"}}`,
+			expected: "6e9ef29b75fffc5b7abae527d58fdadb2fe42e7219011976917343065f58ed4a",
+		},
+		{
+			name:     "hmac unsupported algo returns empty",
+			template: `{{hmac "md5" "key" "msg"}}`,
+			expected: "",
+		},
+		{
+			name:     "urlEncode spaces and special chars",
+			template: `{{urlEncode "a b&c"}}`,
+			expected: "a+b%26c",
+		},
+		{
+			name:     "toJSON string",
+			template: `{{toJSON "hello"}}`,
+			expected: `"hello"`,
+		},
+		{
+			name: "toJSON map via UserVars",
+			data: IterationData{
+				UserVars: map[string]string{"k": "v"},
+			},
+			template: `{{toJSON .UserVars}}`,
+			expected: `{"k":"v"}`,
+		},
+		{
+			name:     "jsonEncode string value",
+			template: `{{jsonEncode "hello world"}}`,
+			expected: `"hello world"`,
+		},
+		{
+			name:     "jsonEncode integer",
+			template: `{{jsonEncode 42}}`,
+			expected: `42`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := renderTemplate("test", tt.template, tt.data, nil)
+			if err != nil {
+				t.Fatalf("renderTemplate failed: %v", err)
+			}
+			if result != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, result)
+			}
+		})
+	}
+}
