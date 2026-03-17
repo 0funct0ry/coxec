@@ -5,6 +5,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
+	"github.com/oklog/ulid/v2"
 )
 
 func TestIterationData_EnvVar(t *testing.T) {
@@ -126,6 +129,56 @@ func TestRandomFunctions(t *testing.T) {
 				choices := map[string]bool{"foo": true, "bar": true, "baz": true}
 				if !choices[result] {
 					t.Errorf("randChoice result %s not in choices", result)
+				}
+			},
+		},
+		{
+			name:     "uuid format",
+			template: `{{uuid}}`,
+			validate: func(t *testing.T, result string) {
+				if _, err := uuid.Parse(result); err != nil {
+					t.Errorf("uuid result %s is not a valid UUID: %v", result, err)
+				}
+			},
+		},
+		{
+			name:     "ulid format",
+			template: `{{ulid}}`,
+			validate: func(t *testing.T, result string) {
+				if _, err := ulid.Parse(result); err != nil {
+					t.Errorf("ulid result %s is not a valid ULID: %v", result, err)
+				}
+			},
+		},
+		{
+			name:     "randName plausibility",
+			template: `{{randName}}`,
+			validate: func(t *testing.T, result string) {
+				parts := strings.Split(result, " ")
+				if len(parts) != 2 {
+					t.Errorf("randName result %s does not look like a full name", result)
+				}
+			},
+		},
+		{
+			name:     "randEmail format",
+			template: `{{randEmail}}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "@") || !strings.Contains(result, ".") {
+					t.Errorf("randEmail result %s is not a valid email", result)
+				}
+			},
+		},
+		{
+			name:     "randPhone format",
+			template: `{{randPhone}}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.HasPrefix(result, "+1-") {
+					t.Errorf("randPhone result %s has wrong prefix", result)
+				}
+				parts := strings.Split(result, "-")
+				if len(parts) != 4 {
+					t.Errorf("randPhone result %s has wrong format", result)
 				}
 			},
 		},

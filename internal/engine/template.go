@@ -3,6 +3,8 @@ package engine
 import (
 	"bytes"
 	"fmt"
+	"github.com/google/uuid"
+	"github.com/oklog/ulid/v2"
 	"math/rand/v2"
 	"os"
 	"strings"
@@ -47,6 +49,11 @@ func ValidateTemplate(name, tpl string) error {
 		"randFloat":  randFloat,
 		"randString": randString,
 		"randChoice": randChoice,
+		"randEmail":  randEmail,
+		"randName":   randName,
+		"randPhone":  randPhone,
+		"uuid":       uuidFunc,
+		"ulid":       ulidFunc,
 	}).Parse(tpl)
 	return err
 }
@@ -63,6 +70,11 @@ func renderTemplate(name string, tpl string, data IterationData) (string, error)
 		"randFloat":  randFloat,
 		"randString": randString,
 		"randChoice": randChoice,
+		"randEmail":  randEmail,
+		"randName":   randName,
+		"randPhone":  randPhone,
+		"uuid":       uuidFunc,
+		"ulid":       ulidFunc,
 	}).Parse(tpl)
 	if err != nil {
 		return "", err
@@ -119,4 +131,33 @@ func shellQuote(s string) string {
 	// Wrap in single quotes, and escape existing single quotes
 	// ' becomes '\''
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+// uuidFunc returns a new RFC 4122 v4 UUID.
+func uuidFunc() string {
+	return uuid.New().String()
+}
+
+// ulidFunc returns a new lexicographically sortable ULID.
+func ulidFunc() string {
+	return ulid.Make().String()
+}
+
+// randName returns a plausible full name.
+func randName() string {
+	firstNames := []string{"James", "Mary", "Robert", "Patricia", "John", "Jennifer", "Michael", "Linda", "David", "Elizabeth", "William", "Barbara", "Richard", "Susan", "Joseph", "Jessica", "Thomas", "Sarah", "Christopher", "Karen"}
+	lastNames := []string{"Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson", "Thomas", "Taylor", "Moore", "Jackson", "Martin"}
+	return firstNames[rand.IntN(len(firstNames))] + " " + lastNames[rand.IntN(len(lastNames))]
+}
+
+// randEmail returns a syntactically valid email address.
+func randEmail() string {
+	domains := []string{"example.com", "test.org", "demo.net", "mail.io", "generic.biz"}
+	name := strings.ReplaceAll(strings.ToLower(randName()), " ", ".")
+	return fmt.Sprintf("%s.%d@%s", name, rand.IntN(1000), domains[rand.IntN(len(domains))])
+}
+
+// randPhone returns a phone number in common international format.
+func randPhone() string {
+	return fmt.Sprintf("+1-%03d-%03d-%04d", rand.IntN(900)+100, rand.IntN(900)+100, rand.IntN(10000))
 }
