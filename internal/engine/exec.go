@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -111,6 +112,8 @@ func RunPipeline(task Task, opts ExecOptions) error {
 		cmdName, args := ParseCommand(renderedStep)
 		var currentResult *Result
 		var err error
+		var stepDuration time.Duration
+		stepStart := time.Now()
 
 		if opts.Registry != nil {
 			if builtin, ok := opts.Registry.Get(cmdName); ok {
@@ -120,13 +123,72 @@ func RunPipeline(task Task, opts ExecOptions) error {
 					UserVars:  opts.UserVars,
 					Prev:      prevResult,
 				})
+				stepDuration = time.Since(stepStart)
+			} else if isReservedBuiltinPrefix(cmdName) {
+				registered := strings.Join(opts.Registry.Names(), ", ")
+				if registered == "" {
+					registered = "none"
+				}
+				err = fmt.Errorf("unknown built-in command '%s'. Currently supported built-ins: %s", cmdName, registered)
+				stepDuration = time.Since(stepStart)
 			}
 		}
 
-		if currentResult == nil {
+		if currentResult == nil && err == nil {
 			// Fall through to shell
-			currentResult, err = runShellStep(renderedStep, opts, task.Index)
+			currentResult, err = runShellStep(renderedStep, task.Index)
+			stepDuration = time.Since(stepStart)
 		}
+
+		exitCode := 0
+		if currentResult != nil {
+			exitCode = currentResult.ExitCode
+		} else if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			} else {
+				exitCode = 1
+			}
+		}
+
+		outputMu.Lock()
+		if !opts.Silent && currentResult != nil {
+			if len(currentResult.Stdout) > 0 {
+				opts.Stdout.Write([]byte(currentResult.Stdout))
+			}
+		}
+
+		if opts.Verbose {
+			statusIndicator := "✓ exit 0"
+			if exitCode != 0 {
+				statusIndicator = fmt.Sprintf("✗ exit %d", exitCode)
+			} else if err != nil {
+				statusIndicator = "✗ error"
+			}
+			durationStr := stepDuration.Round(time.Millisecond).String()
+			fmt.Fprintf(opts.Stderr, "[%d/%d] %s   %s   %s\n",
+				task.Index, opts.TotalTasks, renderedStep, durationStr, statusIndicator)
+
+			if currentResult != nil {
+				if len(currentResult.Stdout) > 0 && !opts.Silent {
+					fmt.Fprintf(opts.Stderr, "      stdout: %s", currentResult.Stdout)
+					if !strings.HasSuffix(currentResult.Stdout, "\n") {
+						fmt.Fprintln(opts.Stderr)
+					}
+				}
+				if len(currentResult.Stderr) > 0 && !opts.Silent {
+					fmt.Fprintf(opts.Stderr, "      stderr: %s", currentResult.Stderr)
+					if !strings.HasSuffix(currentResult.Stderr, "\n") {
+						fmt.Fprintln(opts.Stderr)
+					}
+				}
+			}
+			if err != nil && currentResult == nil {
+				fmt.Fprintf(opts.Stderr, "      error: %v\n", err)
+			}
+			fmt.Fprintln(opts.Stderr)
+		}
+		outputMu.Unlock()
 
 		if err != nil {
 			return err
@@ -137,7 +199,7 @@ func RunPipeline(task Task, opts ExecOptions) error {
 	return nil
 }
 
-func runShellStep(command string, opts ExecOptions, taskIndex int) (*Result, error) {
+func runShellStep(command string, taskIndex int) (*Result, error) {
 	cmd := exec.Command("sh", "-c", command)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Env = append(os.Environ(), fmt.Sprintf("COXEC_INDEX=%d", taskIndex))
@@ -158,38 +220,6 @@ func runShellStep(command string, opts ExecOptions, taskIndex int) (*Result, err
 			exitCode = 1
 		}
 	}
-
-	outputMu.Lock()
-	if !opts.Silent {
-		if stdoutBuf.Len() > 0 {
-			opts.Stdout.Write(stdoutBuf.Bytes())
-		}
-	}
-
-	if opts.Verbose {
-		statusIndicator := "✓ exit 0"
-		if exitCode != 0 {
-			statusIndicator = fmt.Sprintf("✗ exit %d", exitCode)
-		}
-		durationStr := duration.Round(time.Millisecond).String()
-		fmt.Fprintf(opts.Stderr, "[%d/%d] %s   %s   %s\n",
-			taskIndex, opts.TotalTasks, command, durationStr, statusIndicator)
-		
-		if stdoutBuf.Len() > 0 && !opts.Silent {
-			fmt.Fprintf(opts.Stderr, "      stdout: %s", stdoutBuf.String())
-			if stdoutBuf.Bytes()[stdoutBuf.Len()-1] != '\n' {
-				fmt.Fprintln(opts.Stderr)
-			}
-		}
-		if stderrBuf.Len() > 0 && !opts.Silent {
-			fmt.Fprintf(opts.Stderr, "      stderr: %s", stderrBuf.String())
-			if stderrBuf.Bytes()[stderrBuf.Len()-1] != '\n' {
-				fmt.Fprintln(opts.Stderr)
-			}
-		}
-		fmt.Fprintln(opts.Stderr)
-	}
-	outputMu.Unlock()
 
 	return &Result{
 		Stdout:   stdoutBuf.String(),
@@ -303,4 +333,16 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 	}
 
 	return nil
+}
+
+// isReservedBuiltinPrefix checks if a command name looks like it was intended to be a built-in
+// but isn't currently registered. This prevents confusing shell fallbacks for typos.
+func isReservedBuiltinPrefix(name string) bool {
+	// A curated list of prefixes we might want to reserve for future built-ins,
+	// or common built-ins that a user might typo.
+	switch name {
+	case "http", "https", "tcp", "udp", "dns", "sql", "redis", "grpc", "ws", "amqp", "kafka":
+		return true
+	}
+	return false
 }

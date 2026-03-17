@@ -74,6 +74,11 @@ Execution source (exactly one required):
   -f, --file string      Path to shell script file to execute repeatedly
   -t, --template string  Path to Go template file defining the execution plan
 
+Built-in clients execute natively without spawning a shell:
+  http                   Execute HTTP requests natively
+  tcp                    Execute TCP connections natively
+  (Unknown commands fall back to shell execution)
+
 By default: only command stdout appears on stdout; summary and diagnostics go to stderr.
 Use -v / --verbose to see detailed per-execution information on stderr.
 Use --silent to suppress all output from executed commands.
@@ -122,7 +127,8 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 		}
 
 		registry := engine.NewBuiltinRegistry()
-		// Future built-ins will be registered here
+		registry.Register(engine.NewHTTPClient())
+		registry.Register(engine.NewTCPClient())
 
 		templateState := engine.NewTemplateState()
 

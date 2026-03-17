@@ -40,3 +40,12 @@ func (r *BuiltinRegistry) Get(name string) (BuiltinClient, bool) {
 func (r *BuiltinRegistry) Register(c BuiltinClient) {
 	r.builtins[c.Name()] = c
 }
+
+// Names returns a list of all registered built-in client names
+func (r *BuiltinRegistry) Names() []string {
+	names := make([]string, 0, len(r.builtins))
+	for name := range r.builtins {
+		names = append(names, name)
+	}
+	return names
+}
