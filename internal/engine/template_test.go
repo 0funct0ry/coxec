@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -67,6 +69,88 @@ func TestIterationData_EnvVar(t *testing.T) {
 			if result != tt.expected {
 				t.Errorf("expected %q, got %q", tt.expected, result)
 			}
+		})
+	}
+}
+
+func TestRandomFunctions(t *testing.T) {
+	tests := []struct {
+		name     string
+		template string
+		validate func(t *testing.T, result string)
+	}{
+		{
+			name:     "randInt range",
+			template: `{{randInt 10 20}}`,
+			validate: func(t *testing.T, result string) {
+				var val int
+				fmt.Sscanf(result, "%d", &val)
+				if val < 10 || val > 20 {
+					t.Errorf("randInt result %d out of range [10, 20]", val)
+				}
+			},
+		},
+		{
+			name:     "randFloat range and precision",
+			template: `{{randFloat 1.5 2.5 3}}`,
+			validate: func(t *testing.T, result string) {
+				var val float64
+				fmt.Sscanf(result, "%f", &val)
+				if val < 1.5 || val > 2.5 {
+					t.Errorf("randFloat result %f out of range [1.5, 2.5]", val)
+				}
+				parts := strings.Split(result, ".")
+				if len(parts) != 2 || len(parts[1]) != 3 {
+					t.Errorf("randFloat result %s has wrong precision", result)
+				}
+			},
+		},
+		{
+			name:     "randString length",
+			template: `{{randString 15}}`,
+			validate: func(t *testing.T, result string) {
+				if len(result) != 15 {
+					t.Errorf("randString result length %d, expected 15", len(result))
+				}
+				for _, r := range result {
+					if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+						t.Errorf("randString result %s contains invalid character %c", result, r)
+					}
+				}
+			},
+		},
+		{
+			name:     "randChoice selection",
+			template: `{{randChoice "foo" "bar" "baz"}}`,
+			validate: func(t *testing.T, result string) {
+				choices := map[string]bool{"foo": true, "bar": true, "baz": true}
+				if !choices[result] {
+					t.Errorf("randChoice result %s not in choices", result)
+				}
+			},
+		},
+		{
+			name:     "different values in one iteration",
+			template: `{{randInt 1 1000000}} {{randInt 1 1000000}}`,
+			validate: func(t *testing.T, result string) {
+				parts := strings.Fields(result)
+				if len(parts) != 2 {
+					t.Fatalf("expected 2 parts, got %d", len(parts))
+				}
+				if parts[0] == parts[1] {
+					t.Errorf("expected different values, got %s and %s (probabilistically unlikely)", parts[0], parts[1])
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := renderTemplate("test", tt.template, IterationData{})
+			if err != nil {
+				t.Fatalf("renderTemplate failed: %v", err)
+			}
+			tt.validate(t, result)
 		})
 	}
 }
