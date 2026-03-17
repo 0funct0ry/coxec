@@ -101,13 +101,6 @@ func RunPipeline(task Task, opts ExecOptions) error {
 		}, opts.TemplateState)
 
 		if renderErr != nil {
-			outputMu.Lock()
-			if opts.Verbose {
-				fmt.Fprintf(opts.Stderr, "[%d/%d] Template error: %v\n\n", task.Index, opts.TotalTasks, renderErr)
-			} else if !opts.Silent {
-				fmt.Fprintf(opts.Stderr, "Iteration %d: template error: %v\n", task.Index, renderErr)
-			}
-			outputMu.Unlock()
 			return renderErr
 		}
 
@@ -215,6 +208,12 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 	var successCount atomic.Int32
 	var failCount atomic.Int32
 
+	type tempErrCount struct {
+		err   *TemplateError
+		count int
+	}
+	templateErrors := make(map[string]*tempErrCount)
+
 	poolStart := time.Now()
 
 	for i := 0; i < concurrency; i++ {
@@ -233,6 +232,13 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 					errMu.Lock()
 					if firstErr == nil {
 						firstErr = err
+					}
+					if te, ok := err.(*TemplateError); ok {
+						k := te.Error()
+						if _, exists := templateErrors[k]; !exists {
+							templateErrors[k] = &tempErrCount{err: te, count: 0}
+						}
+						templateErrors[k].count++
 					}
 					errMu.Unlock()
 				} else {
@@ -265,6 +271,16 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 		fmt.Fprintf(stderr, "Success: %d   Failed: %d\n", successCount.Load(), failCount.Load())
 		if rate > 0 {
 			fmt.Fprintf(stderr, "Rate: ~%.1f executions/sec\n", rate)
+		}
+	}
+
+	if len(templateErrors) > 0 {
+		fmt.Fprintf(stderr, "\nTemplate Errors:\n")
+		for _, tec := range templateErrors {
+			fmt.Fprintf(stderr, "  - %s (occurred %d times)\n", tec.err.Error(), tec.count)
+			if tec.err.Suggestion != "" {
+				fmt.Fprintf(stderr, "    Suggestion: %s\n", tec.err.Suggestion)
+			}
 		}
 	}
 

@@ -265,7 +265,15 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			// Instead, we will pass the template string to the engine to parse and execute.
 			// The engine will then generate the actual commands/pipelines.
 			// For now, we'll just validate the template. The actual execution logic will be more complex.
-			if err := engine.ValidateTemplate("plan", tplStr, templateState); err != nil {
+			if err := engine.ValidateTemplate(templateFlag, tplStr, templateState); err != nil {
+				if te, ok := err.(*engine.TemplateError); ok {
+					return &ValidationError{
+						ExitCode:   validationExitCode,
+						ID:         "INVALID_TEMPLATE",
+						Message:    fmt.Sprintf("template parse error: %s", te.Error()),
+						Suggestion: te.Suggestion,
+					}
+				}
 				return &ValidationError{
 					ExitCode:   validationExitCode,
 					ID:         "INVALID_TEMPLATE",

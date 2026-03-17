@@ -66,8 +66,8 @@ func (d IterationData) Var(key string) string {
 // ValidateTemplate parses a template string to check for syntax errors.
 // It returns a descriptive error if parsing fails.
 func ValidateTemplate(name, tpl string, state *TemplateState) error {
-	_, err := template.New(name).Funcs(funcMap(IterationData{}, state)).Parse(tpl)
-	return err
+	_, err := template.New(name).Funcs(funcMap(IterationData{}, state)).Option("missingkey=error").Parse(tpl)
+	return wrapTemplateError(err, name, tpl)
 }
 
 // renderTemplate parses and executes a Go template string with the provided data
@@ -76,14 +76,14 @@ func renderTemplate(name string, tpl string, data IterationData, state *Template
 		return "", nil
 	}
 
-	t, err := template.New(name).Funcs(funcMap(data, state)).Parse(tpl)
+	t, err := template.New(name).Funcs(funcMap(data, state)).Option("missingkey=error").Parse(tpl)
 	if err != nil {
-		return "", err
+		return "", wrapTemplateError(err, name, tpl)
 	}
 
 	var buf bytes.Buffer
 	if err := t.Execute(&buf, data); err != nil {
-		return "", err
+		return "", wrapTemplateError(err, name, tpl)
 	}
 
 	return buf.String(), nil
