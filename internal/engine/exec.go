@@ -59,7 +59,8 @@ type ExecOptions struct {
 	Stderr interface {
 		Write([]byte) (int, error)
 	}
-	Registry *BuiltinRegistry
+	Registry      *BuiltinRegistry
+	TemplateState *TemplateState
 }
 
 // RunPipeline executes a series of pipeline steps
@@ -97,7 +98,7 @@ func RunPipeline(task Task, opts ExecOptions) error {
 			UUID:               task.UUID,
 			UserVars:           opts.UserVars,
 			Prev:               prevResult,
-		})
+		}, opts.TemplateState)
 
 		if renderErr != nil {
 			outputMu.Lock()

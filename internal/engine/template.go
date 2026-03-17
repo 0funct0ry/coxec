@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"github.com/google/uuid"
@@ -8,6 +9,8 @@ import (
 	"math/rand/v2"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"text/template"
 )
 
@@ -22,6 +25,19 @@ type IterationData struct {
 	UUID               string
 	UserVars           map[string]string
 	Prev               *Result // Previous pipeline step result
+}
+
+// TemplateState stores shared state across multiple template renderings in a single run
+type TemplateState struct {
+	counters    sync.Map // name -> *atomic.Int64
+	fileLines   sync.Map // filename -> []string (cached lines)
+	fileCursors sync.Map // filename -> *atomic.Int64 (sequential cursor)
+	mu          sync.Mutex
+}
+
+// NewTemplateState creates a new TemplateState
+func NewTemplateState() *TemplateState {
+	return &TemplateState{}
 }
 
 // Env returns the value of an environment variable.
@@ -42,40 +58,18 @@ func (d IterationData) Var(key string) string {
 
 // ValidateTemplate parses a template string to check for syntax errors.
 // It returns a descriptive error if parsing fails.
-func ValidateTemplate(name, tpl string) error {
-	_, err := template.New(name).Funcs(template.FuncMap{
-		"quote":      shellQuote,
-		"randInt":    randInt,
-		"randFloat":  randFloat,
-		"randString": randString,
-		"randChoice": randChoice,
-		"randEmail":  randEmail,
-		"randName":   randName,
-		"randPhone":  randPhone,
-		"uuid":       uuidFunc,
-		"ulid":       ulidFunc,
-	}).Parse(tpl)
+func ValidateTemplate(name, tpl string, state *TemplateState) error {
+	_, err := template.New(name).Funcs(funcMap(IterationData{}, state)).Parse(tpl)
 	return err
 }
 
 // renderTemplate parses and executes a Go template string with the provided data
-func renderTemplate(name string, tpl string, data IterationData) (string, error) {
+func renderTemplate(name string, tpl string, data IterationData, state *TemplateState) (string, error) {
 	if tpl == "" {
 		return "", nil
 	}
 
-	t, err := template.New(name).Funcs(template.FuncMap{
-		"quote":      shellQuote,
-		"randInt":    randInt,
-		"randFloat":  randFloat,
-		"randString": randString,
-		"randChoice": randChoice,
-		"randEmail":  randEmail,
-		"randName":   randName,
-		"randPhone":  randPhone,
-		"uuid":       uuidFunc,
-		"ulid":       ulidFunc,
-	}).Parse(tpl)
+	t, err := template.New(name).Funcs(funcMap(data, state)).Parse(tpl)
 	if err != nil {
 		return "", err
 	}
@@ -86,6 +80,110 @@ func renderTemplate(name string, tpl string, data IterationData) (string, error)
 	}
 
 	return buf.String(), nil
+}
+
+func funcMap(data IterationData, state *TemplateState) template.FuncMap {
+	return template.FuncMap{
+		"quote":      shellQuote,
+		"randInt":    randInt,
+		"randFloat":  randFloat,
+		"randString": randString,
+		"randChoice": randChoice,
+		"randEmail":  randEmail,
+		"randName":   randName,
+		"randPhone":  randPhone,
+		"uuid":       uuidFunc,
+		"ulid":       ulidFunc,
+		"seq":        func(start, end, step int) int { return seq(start, end, step, data.Iteration) },
+		"counter":    func(name string) int64 { return counter(name, state) },
+		"fileLine":   func(filename string) string { return fileLine(filename, state) },
+		"fileLineAt": func(filename string, index int) string { return fileLineAt(filename, index, state) },
+	}
+}
+
+// seq returns a value in a sequence based on the current iteration.
+func seq(start, end, step, iteration int) int {
+	if step == 0 {
+		return start
+	}
+	val := start + (iteration * step)
+	if step > 0 && val > end {
+		return end
+	}
+	if step < 0 && val < end {
+		return end
+	}
+	return val
+}
+
+// counter returns an incrementing number starting from 1 for each named counter.
+func counter(name string, state *TemplateState) int64 {
+	if state == nil {
+		return 1
+	}
+	actual, _ := state.counters.LoadOrStore(name, &atomic.Int64{})
+	c := actual.(*atomic.Int64)
+	return c.Add(1)
+}
+
+// fileLine returns the next line from the file (sequential access).
+func fileLine(filename string, state *TemplateState) string {
+	if state == nil {
+		return ""
+	}
+	lines, err := getCachedLines(filename, state)
+	if err != nil || len(lines) == 0 {
+		return ""
+	}
+	actual, _ := state.fileCursors.LoadOrStore(filename, &atomic.Int64{})
+	cursor := actual.(*atomic.Int64)
+	idx := cursor.Add(1) - 1
+	return lines[idx%int64(len(lines))]
+}
+
+// fileLineAt returns the line at the specified index (1-based).
+func fileLineAt(filename string, index int, state *TemplateState) string {
+	if state == nil {
+		return ""
+	}
+	lines, err := getCachedLines(filename, state)
+	if err != nil || index < 1 || index > len(lines) {
+		return ""
+	}
+	return lines[index-1]
+}
+
+func getCachedLines(filename string, state *TemplateState) ([]string, error) {
+	if val, ok := state.fileLines.Load(filename); ok {
+		return val.([]string), nil
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	// Double check after acquiring lock
+	if val, ok := state.fileLines.Load(filename); ok {
+		return val.([]string), nil
+	}
+
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	state.fileLines.Store(filename, lines)
+	return lines, nil
 }
 
 // randInt returns a random integer between min and max inclusive.

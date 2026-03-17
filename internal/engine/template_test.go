@@ -65,7 +65,7 @@ func TestIterationData_EnvVar(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := renderTemplate("test", tt.template, tt.data)
+			result, err := renderTemplate("test", tt.template, tt.data, nil)
 			if err != nil {
 				t.Fatalf("renderTemplate failed: %v", err)
 			}
@@ -199,11 +199,98 @@ func TestRandomFunctions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := renderTemplate("test", tt.template, IterationData{})
+			result, err := renderTemplate("test", tt.template, IterationData{}, nil)
 			if err != nil {
 				t.Fatalf("renderTemplate failed: %v", err)
 			}
 			tt.validate(t, result)
+		})
+	}
+}
+
+func TestDataFunctions(t *testing.T) {
+	// Create a temporary file for testing fileLine and fileLineAt
+	tmpfile, err := os.CreateTemp("", "coxec_test_data.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+
+	content := "line1\nline2\nline3"
+	if _, err := tmpfile.Write([]byte(content)); err != nil {
+		t.Fatal(err)
+	}
+	if err := tmpfile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name      string
+		iteration int
+		template  string
+		expected  string
+	}{
+		{
+			name:      "seq ascending",
+			iteration: 2,
+			template:  `{{seq 1 10 2}}`,
+			expected:  "5", // 1 + (2 * 2) = 5
+		},
+		{
+			name:      "seq upper bound",
+			iteration: 5,
+			template:  `{{seq 1 10 3}}`,
+			expected:  "10", // 1 + (5 * 3) = 16 -> 10
+		},
+		{
+			name:      "counter increments",
+			iteration: 0,
+			template:  `{{counter "a"}} {{counter "a"}}`,
+			expected:  "1 2",
+		},
+		{
+			name:      "named counters are separate",
+			iteration: 0,
+			template:  `{{counter "b"}} {{counter "c"}}`,
+			expected:  "1 1",
+		},
+		{
+			name:      "fileLineAt valid",
+			iteration: 0,
+			template:  fmt.Sprintf(`{{fileLineAt %q 2}}`, tmpfile.Name()),
+			expected:  "line2",
+		},
+		{
+			name:      "fileLineAt out of range",
+			iteration: 0,
+			template:  fmt.Sprintf(`{{fileLineAt %q 10}}`, tmpfile.Name()),
+			expected:  "",
+		},
+		{
+			name:      "fileLine sequential",
+			iteration: 0,
+			template:  fmt.Sprintf(`{{fileLine %q}} {{fileLine %q}}`, tmpfile.Name(), tmpfile.Name()),
+			expected:  "line1 line2",
+		},
+		{
+			name:      "fileLine wraps around",
+			iteration: 0,
+			template:  fmt.Sprintf(`{{fileLine %q}} {{fileLine %q}} {{fileLine %q}} {{fileLine %q}}`, tmpfile.Name(), tmpfile.Name(), tmpfile.Name(), tmpfile.Name()),
+			expected:  "line1 line2 line3 line1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := NewTemplateState()
+			data := IterationData{Iteration: tt.iteration}
+			result, err := renderTemplate("test", tt.template, data, state)
+			if err != nil {
+				t.Fatalf("renderTemplate failed: %v", err)
+			}
+			if result != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, result)
+			}
 		})
 	}
 }

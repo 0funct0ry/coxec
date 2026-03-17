@@ -124,6 +124,8 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 		registry := engine.NewBuiltinRegistry()
 		// Future built-ins will be registered here
 
+		templateState := engine.NewTemplateState()
+
 		if executeCmd != "" {
 			// Disable printing usage to avoid cluttering stderr on command failure
 			cmd.SilenceUsage = true
@@ -157,8 +159,9 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				Silent:     silentFlag,
 				TotalTasks: iterations,
 				Context:    ctx, Stdout: os.Stdout, Stderr: os.Stderr,
-				UserVars: userVars,
-				Registry: registry,
+				UserVars:      userVars,
+				Registry:      registry,
+				TemplateState: templateState,
 			}
 
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
@@ -215,8 +218,9 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				Silent:     silentFlag,
 				TotalTasks: iterations,
 				Context:    ctx, Stdout: os.Stdout, Stderr: os.Stderr,
-				UserVars: userVars,
-				Registry: registry,
+				UserVars:      userVars,
+				Registry:      registry,
+				TemplateState: templateState,
 			}
 
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
@@ -261,7 +265,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			// Instead, we will pass the template string to the engine to parse and execute.
 			// The engine will then generate the actual commands/pipelines.
 			// For now, we'll just validate the template. The actual execution logic will be more complex.
-			if err := engine.ValidateTemplate("plan", tplStr); err != nil {
+			if err := engine.ValidateTemplate("plan", tplStr, templateState); err != nil {
 				return &ValidationError{
 					ExitCode:   validationExitCode,
 					ID:         "INVALID_TEMPLATE",
