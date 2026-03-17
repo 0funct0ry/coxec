@@ -13,10 +13,12 @@ import (
 	"math/rand/v2"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"text/template"
+	"time"
 )
 
 // IterationData holds the data available to the command templates
@@ -103,6 +105,13 @@ func funcMap(data IterationData, state *TemplateState) template.FuncMap {
 		"counter":    func(name string) int64 { return counter(name, state) },
 		"fileLine":   func(filename string) string { return fileLine(filename, state) },
 		"fileLineAt": func(filename string, index int) string { return fileLineAt(filename, index, state) },
+		// Utility functions
+		"now":          nowFunc,
+		"add":          addFunc,
+		"mod":          modFunc,
+		"regexReplace": regexReplaceFunc,
+		"env":          os.Getenv,
+		"split":        strings.Split,
 		// Encoding & crypto
 		"jsonEncode": jsonEncodeFunc,
 		"base64Enc":  base64EncFunc,
@@ -331,4 +340,36 @@ func toJSONFunc(v any) string {
 		return ""
 	}
 	return string(b)
+}
+
+// nowFunc returns the current time. If customFormat is provided, it uses that layout.
+// Otherwise, it defaults to time.RFC3339.
+func nowFunc(customFormat ...string) string {
+	now := time.Now()
+	if len(customFormat) > 0 && customFormat[0] != "" {
+		return now.Format(customFormat[0])
+	}
+	return now.Format(time.RFC3339)
+}
+
+// addFunc returns the sum of a and b.
+func addFunc(a, b int) int {
+	return a + b
+}
+
+// modFunc returns a modulo b. If b is 0, it returns an error to prevent a panic.
+func modFunc(a, b int) (int, error) {
+	if b == 0 {
+		return 0, fmt.Errorf("modulo by zero")
+	}
+	return a % b, nil
+}
+
+// regexReplaceFunc replaces string matches of the regular expression pattern with the replacement string repl.
+func regexReplaceFunc(pattern, repl, src string) (string, error) {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return "", err
+	}
+	return re.ReplaceAllString(src, repl), nil
 }

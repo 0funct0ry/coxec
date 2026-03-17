@@ -337,6 +337,7 @@ func TestEncodingFunctions(t *testing.T) {
 			template: `{{urlEncode "a b&c"}}`,
 			expected: "a+b%26c",
 		},
+// toJSON string
 		{
 			name:     "toJSON string",
 			template: `{{toJSON "hello"}}`,
@@ -369,6 +370,111 @@ func TestEncodingFunctions(t *testing.T) {
 				t.Fatalf("renderTemplate failed: %v", err)
 			}
 			if result != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestUtilityFunctions(t *testing.T) {
+	// Setup env var for 'env' test
+	os.Setenv("COXEC_UTIL_ENV", "util_val")
+	defer os.Unsetenv("COXEC_UTIL_ENV")
+
+	tests := []struct {
+		name        string
+		template    string
+		expected    string
+		expectError bool
+		validate    func(t *testing.T, result string)
+	}{
+		{
+			name:     "add basic",
+			template: `{{add 5 10}}`,
+			expected: "15",
+		},
+		{
+			name:     "add negative",
+			template: `{{add -5 10}}`,
+			expected: "5",
+		},
+		{
+			name:     "mod normal",
+			template: `{{mod 17 5}}`,
+			expected: "2",
+		},
+		{
+			name:        "mod zero panics",
+			template:    `{{mod 17 0}}`,
+			expectError: true,
+		},
+		{
+			name:     "regexReplace matching",
+			template: `{{regexReplace "[0-9]+" "X" "item-42-price-100"}}`,
+			expected: "item-X-price-X",
+		},
+		{
+			name:     "regexReplace no match",
+			template: `{{regexReplace "[0-9]+" "X" "item-price"}}`,
+			expected: "item-price",
+		},
+		{
+			name:        "regexReplace invalid regex",
+			template:    `{{regexReplace "[" "X" "item"}}`,
+			expectError: true,
+		},
+		{
+			name:     "env existing",
+			template: `{{env "COXEC_UTIL_ENV"}}`,
+			expected: "util_val",
+		},
+		{
+			name:     "env missing",
+			template: `{{env "COXEC_MISSING_ENV"}}`,
+			expected: "",
+		},
+		{
+			name:     "split and index",
+			template: `{{$arr := split "id,name,email" ","}}{{index $arr 1}}`,
+			expected: "name",
+		},
+		{
+			name:     "now default",
+			template: `{{now}}`,
+			validate: func(t *testing.T, result string) {
+				if len(result) < 10 || !strings.Contains(result, "T") {
+					t.Errorf("now result %s does not look like RFC3339", result)
+				}
+			},
+		},
+		{
+			name:     "now custom format",
+			template: `{{now "2006-01-02"}}`,
+			validate: func(t *testing.T, result string) {
+				if len(result) != 10 {
+					t.Errorf("now custom result %s does not look like YYYY-MM-DD", result)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := renderTemplate("test", tt.template, IterationData{}, nil)
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("expected error, got result %q", result)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("renderTemplate failed: %v", err)
+			}
+
+			if tt.validate != nil {
+				tt.validate(t, result)
+			} else if result != tt.expected {
 				t.Errorf("expected %q, got %q", tt.expected, result)
 			}
 		})
