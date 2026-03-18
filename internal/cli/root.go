@@ -77,6 +77,7 @@ Execution source (exactly one required):
 Built-in clients execute natively without spawning a shell:
   http                   Execute HTTP requests natively
   tcp                    Execute TCP connections natively
+  sleep                  Pause execution for a duration
   (Unknown commands fall back to shell execution)
 
 By default: only command stdout appears on stdout; summary and diagnostics go to stderr.
@@ -130,6 +131,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 		registry := engine.NewBuiltinRegistry()
 		registry.Register(engine.NewHTTPClient())
 		registry.Register(engine.NewTCPClient())
+		registry.Register(engine.NewSleepClient())
 
 		templateState := engine.NewTemplateState()
 

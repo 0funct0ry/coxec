@@ -12,10 +12,11 @@ type BuiltinClient interface {
 
 // Result represents the outcome of a pipeline step
 type Result struct {
-	Stdout   string
-	Stderr   string
-	ExitCode int
-	Latency  int64 // in nanoseconds
+	Stdout        string
+	Stderr        string
+	ExitCode      int
+	Latency       int64 // in nanoseconds
+	IsTransparent bool  // If true, Stdout has already been handled or should be ignored for display
 }
 
 // BuiltinRegistry manages registered built-in clients

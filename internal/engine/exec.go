@@ -154,7 +154,7 @@ func RunPipeline(task Task, opts ExecOptions) error {
 		}
 
 		outputMu.Lock()
-		if !opts.Silent && currentResult != nil {
+		if !opts.Silent && currentResult != nil && !currentResult.IsTransparent {
 			if len(currentResult.Stdout) > 0 {
 				opts.Stdout.Write([]byte(currentResult.Stdout))
 			}
@@ -171,7 +171,7 @@ func RunPipeline(task Task, opts ExecOptions) error {
 			fmt.Fprintf(opts.Stderr, "[%d/%d] %s   %s   %s\n",
 				task.Index, opts.TotalTasks, renderedStep, durationStr, statusIndicator)
 
-			if currentResult != nil {
+			if currentResult != nil && !currentResult.IsTransparent {
 				if len(currentResult.Stdout) > 0 && !opts.Silent {
 					fmt.Fprintf(opts.Stderr, "      stdout: %s", currentResult.Stdout)
 					if !strings.HasSuffix(currentResult.Stdout, "\n") {
@@ -385,7 +385,7 @@ func isReservedBuiltinPrefix(name string) bool {
 	// A curated list of prefixes we might want to reserve for future built-ins,
 	// or common built-ins that a user might typo.
 	switch name {
-	case "http", "https", "tcp", "udp", "dns", "sql", "redis", "grpc", "ws", "amqp", "kafka":
+	case "http", "https", "tcp", "udp", "dns", "sql", "redis", "grpc", "ws", "amqp", "kafka", "sleep":
 		return true
 	}
 	return false
