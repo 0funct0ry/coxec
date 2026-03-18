@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -51,6 +52,7 @@ type Task struct {
 type ExecOptions struct {
 	Verbose    bool
 	Silent     bool
+	Report     bool
 	TotalTasks int
 	Context    context.Context
 	Stdout     interface {
@@ -244,6 +246,12 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 	}
 	templateErrors := make(map[string]*tempErrCount)
 
+	type httpErrCount struct {
+		err   *HTTPError
+		count int
+	}
+	httpErrors := make(map[string]*httpErrCount)
+
 	poolStart := time.Now()
 
 	for i := 0; i < concurrency; i++ {
@@ -269,6 +277,14 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 							templateErrors[k] = &tempErrCount{err: te, count: 0}
 						}
 						templateErrors[k].count++
+					}
+					var he *HTTPError
+					if errors.As(err, &he) {
+						k := he.Category
+						if _, exists := httpErrors[k]; !exists {
+							httpErrors[k] = &httpErrCount{err: he, count: 0}
+						}
+						httpErrors[k].count++
 					}
 					errMu.Unlock()
 				} else {
@@ -311,6 +327,13 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 			if tec.err.Suggestion != "" {
 				fmt.Fprintf(stderr, "    Suggestion: %s\n", tec.err.Suggestion)
 			}
+		}
+	}
+
+	if opts.Report && len(httpErrors) > 0 {
+		fmt.Fprintf(stderr, "\nHTTP Errors:\n")
+		for cat, hec := range httpErrors {
+			fmt.Fprintf(stderr, "  - %s: %d\n", cat, hec.count)
 		}
 	}
 

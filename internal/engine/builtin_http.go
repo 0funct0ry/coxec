@@ -132,62 +132,88 @@ func (c *HTTPClient) Execute(ctx context.Context, args []string, data IterationD
 	resp, err := c.client.Do(req)
 	latency := time.Since(start)
 
+	var statusCode int
+	success := false
+	var errMsg *string
+	var respBody []byte
+	headerMap := make(map[string]string)
+
+	var httpErr *HTTPError
+
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || osIsTimeout(err) {
-			return nil, fmt.Errorf("http request timed out after %v", latency)
-		}
 		if errors.Is(err, context.Canceled) {
 			return nil, err
 		}
-		return nil, fmt.Errorf("http target unreachable: %w", err)
-	}
-	defer resp.Body.Close()
+		success = false
+		eStr := err.Error()
+		errMsg = &eStr
+		category := categorizeHTTPError(err)
+		httpErr = NewHTTPError(category, err)
+	} else {
+		defer resp.Body.Close()
+		statusCode = resp.StatusCode
+		success = statusCode >= 200 && statusCode < 400
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	outFormat := httpOutputFormat(strings.ToLower(output))
-	
-	var stdout string
-	switch outFormat {
-	case OutputJSON, OutputJSONL:
-		headerMap := make(map[string]string)
 		for k, v := range resp.Header {
 			headerMap[k] = strings.Join(v, ", ")
 		}
 
-		// Try to parse body as JSON if possible to embed it directly, otherwise keep as string
-		// For the requirement "body (string or truncated preview)", we just include the string body.
-		var jsonBody interface{}
-		if len(respBody) > 0 && (strings.HasPrefix(string(respBody), "{") || strings.HasPrefix(string(respBody), "[")) {
-			var decoded interface{}
-			if err := json.Unmarshal(respBody, &decoded); err == nil {
-				jsonBody = decoded
-			} else {
-				jsonBody = string(respBody)
-			}
+		b, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			eStr := fmt.Sprintf("failed to read response body: %v", readErr)
+			errMsg = &eStr
+			httpErr = NewHTTPError("body_read_error", readErr)
 		} else {
-			jsonBody = string(respBody)
+			respBody = b
+		}
+
+		if !success && httpErr == nil {
+			var cat string
+			if statusCode >= 500 {
+				cat = "http_5xx"
+			} else if statusCode == 429 {
+				cat = "http_429"
+			} else {
+				cat = "http_4xx"
+			}
+			httpErr = NewHTTPError(cat, fmt.Errorf("HTTP %d", statusCode))
+		}
+	}
+
+	outFormat := httpOutputFormat(strings.ToLower(output))
+
+	var stdout string
+	switch outFormat {
+	case OutputJSON, OutputJSONL:
+		var previewString string
+		if len(respBody) > 0 {
+			previewString = string(respBody)
+			if len(previewString) > 1024 {
+				previewString = previewString[:1024] + "... (truncated)"
+			}
 		}
 
 		resultObj := map[string]interface{}{
-			"status":     resp.StatusCode,
-			"latency_ms": float64(latency.Microseconds()) / 1000.0,
-			"headers":    headerMap,
-			"body":       jsonBody,
+			"iteration":             data.Iteration,
+			"worker_id":             data.WorkerID,
+			"method":                method,
+			"url":                   rawURL,
+			"status_code":           statusCode,
+			"latency_ms":            float64(latency.Microseconds()) / 1000.0,
+			"success":               success,
+			"error":                 errMsg,
+			"response_headers":      headerMap,
+			"response_body_preview": previewString,
 		}
 
-		b, err := json.Marshal(resultObj)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode JSON output: %w", err)
+		b, encErr := json.Marshal(resultObj)
+		if encErr != nil {
+			return nil, fmt.Errorf("failed to encode JSON output: %w", encErr)
 		}
-		
+
 		if outFormat == OutputJSON {
-			// Pretty print if json (not jsonl)
 			var prettyJSON bytes.Buffer
-			if err := json.Indent(&prettyJSON, b, "", "  "); err == nil {
+			if identErr := json.Indent(&prettyJSON, b, "", "  "); identErr == nil {
 				stdout = prettyJSON.String() + "\n"
 			} else {
 				stdout = string(b) + "\n"
@@ -199,15 +225,39 @@ func (c *HTTPClient) Execute(ctx context.Context, args []string, data IterationD
 	case OutputText:
 		fallthrough
 	default:
-		stdout = fmt.Sprintf("HTTP %d | %dms\n", resp.StatusCode, latency.Milliseconds())
+		if httpErr != nil && resp == nil {
+			stdout = fmt.Sprintf("HTTP ERROR | %dms | %v\n", latency.Milliseconds(), err)
+		} else {
+			stdout = fmt.Sprintf("HTTP %d | %dms\n", statusCode, latency.Milliseconds())
+		}
 	}
 
-	return &Result{
+	res := &Result{
 		Stdout:   stdout,
 		Stderr:   "",
 		ExitCode: 0,
 		Latency:  latency.Nanoseconds(),
-	}, nil
+	}
+
+	if httpErr != nil {
+		res.ExitCode = 1
+		return res, httpErr
+	}
+
+	return res, nil
+}
+
+func categorizeHTTPError(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) || osIsTimeout(err) {
+		return "timeout"
+	}
+	if strings.Contains(err.Error(), "connection refused") {
+		return "connection_refused"
+	}
+	if strings.Contains(err.Error(), "no such host") {
+		return "dns_error"
+	}
+	return "network_error"
 }
 
 func osIsTimeout(err error) bool {

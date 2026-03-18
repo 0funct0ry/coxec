@@ -89,6 +89,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 		versionFlag, _ := cmd.Flags().GetBool("version")
 		verboseFlag, _ := cmd.Flags().GetBool("verbose")
 		silentFlag, _ := cmd.Flags().GetBool("silent")
+		reportFlag, _ := cmd.Flags().GetBool("report")
 		if versionFlag {
 			fmt.Printf("coxec version %s\n", Version)
 			return nil
@@ -161,10 +162,13 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			}()
 
 			opts := engine.ExecOptions{
-				Verbose:    verboseFlag,
-				Silent:     silentFlag,
-				TotalTasks: iterations,
-				Context:    ctx, Stdout: os.Stdout, Stderr: os.Stderr,
+				Verbose:       verboseFlag,
+				Silent:        silentFlag,
+				Report:        reportFlag,
+				TotalTasks:    iterations,
+				Context:       ctx,
+				Stdout:        os.Stdout,
+				Stderr:        os.Stderr,
 				UserVars:      userVars,
 				Registry:      registry,
 				TemplateState: templateState,
@@ -220,10 +224,13 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			}()
 
 			opts := engine.ExecOptions{
-				Verbose:    verboseFlag,
-				Silent:     silentFlag,
-				TotalTasks: iterations,
-				Context:    ctx, Stdout: os.Stdout, Stderr: os.Stderr,
+				Verbose:       verboseFlag,
+				Silent:        silentFlag,
+				Report:        reportFlag,
+				TotalTasks:    iterations,
+				Context:       ctx,
+				Stdout:        os.Stdout,
+				Stderr:        os.Stderr,
 				UserVars:      userVars,
 				Registry:      registry,
 				TemplateState: templateState,
@@ -310,12 +317,15 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			}()
 
 			opts := engine.ExecOptions{
-				Verbose:    verboseFlag,
-				Silent:     silentFlag,
-				TotalTasks: iterations,
-				Context:    ctx, Stdout: os.Stdout, Stderr: os.Stderr,
-				UserVars: userVars,
-				Registry: registry,
+				Verbose:       verboseFlag,
+				Silent:        silentFlag,
+				Report:        reportFlag,
+				TotalTasks:    iterations,
+				Context:       ctx,
+				Stdout:        os.Stdout,
+				Stderr:        os.Stderr,
+				UserVars:      userVars,
+				Registry:      registry,
 			}
 
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
@@ -329,6 +339,7 @@ func init() {
 	rootCmd.Flags().Bool("version", false, "Print the version number")
 	rootCmd.Flags().BoolP("verbose", "v", false, "Show detailed per-execution information on stderr")
 	rootCmd.Flags().Bool("silent", false, "Suppress child stdout/stderr payload")
+	rootCmd.Flags().Bool("report", false, "Include HTTP-specific error breakdown in the execution output")
 	rootCmd.Flags().StringP("execute", "e", "", "Shell command or built-in to execute repeatedly")
 	rootCmd.Flags().StringP("file", "f", "", "Path to shell script file to execute repeatedly")
 	rootCmd.Flags().StringP("template", "t", "", "Path to Go template file defining the execution plan")

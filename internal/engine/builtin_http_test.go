@@ -80,12 +80,12 @@ func TestHTTPClient_Execute(t *testing.T) {
 					t.Fatalf("failed to decode json output: %v", err)
 				}
 				
-				if data["status"].(float64) != 201 {
-					t.Errorf("expected status 201, got %v", data["status"])
+				if data["status_code"].(float64) != 201 {
+					t.Errorf("expected status 201, got %v", data["status_code"])
 				}
-				headers, ok := data["headers"].(map[string]interface{})
+				headers, ok := data["response_headers"].(map[string]interface{})
 				if !ok {
-					t.Fatalf("expected headers object in json output")
+					t.Fatalf("expected response_headers object in json output")
 				}
 				if headers["X-Custom-Header"] != "my-val" {
 					t.Errorf("expected X-Custom-Header response to echo my-val, got %v", headers["X-Custom-Header"])
@@ -93,22 +93,16 @@ func TestHTTPClient_Execute(t *testing.T) {
 			},
 		},
 		{
-			name: "404 is still successful execution",
+			name: "404 is an error",
 			args: []string{"GET", ts.URL + "/status/404"},
-			checkResult: func(t *testing.T, res *Result) {
-				if res.ExitCode != 0 {
-					t.Errorf("expected exit code 0 for HTTP error status, got %d", res.ExitCode)
-				}
-				if !strings.Contains(res.Stdout, "HTTP 404") {
-					t.Errorf("expected stdout to contain HTTP 404, got: %s", res.Stdout)
-				}
-			},
+			wantErr: true,
+			errContains: "HTTP 404",
 		},
 		{
 			name: "Unreachable target",
 			args: []string{"GET", "http://localhost:1"}, // Assuming nothing listening on port 1
 			wantErr: true,
-			errContains: "unreachable",
+			errContains: "connection refused",
 		},
 		{
 			name: "Invalid method",
@@ -167,7 +161,7 @@ func TestHTTPClient_OutputJSONL(t *testing.T) {
 	if err := json.Unmarshal([]byte(res.Stdout), &data); err != nil {
 		t.Fatalf("failed to decode jsonl output: %v", err)
 	}
-	if data["status"].(float64) != 200 {
+	if data["status_code"].(float64) != 200 {
 		t.Errorf("expected status 200")
 	}
 }

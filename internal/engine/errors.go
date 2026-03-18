@@ -103,3 +103,28 @@ func generateSuggestion(msg string) string {
 	}
 	return ""
 }
+
+// HTTPError represents a structured error that occurs during HTTP builtin execution.
+type HTTPError struct {
+	Category string
+	Err      error
+}
+
+func (e *HTTPError) Error() string {
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return e.Category
+}
+
+func (e *HTTPError) Unwrap() error {
+	return e.Err
+}
+
+// NewHTTPError creates a new HTTPError with the given category and wrapped error.
+func NewHTTPError(category string, err error) *HTTPError {
+	return &HTTPError{
+		Category: category,
+		Err:      err,
+	}
+}
