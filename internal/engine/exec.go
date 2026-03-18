@@ -252,6 +252,12 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 	}
 	httpErrors := make(map[string]*httpErrCount)
 
+	type tcpErrCount struct {
+		err   *TCPError
+		count int
+	}
+	tcpErrors := make(map[string]*tcpErrCount)
+
 	poolStart := time.Now()
 
 	for i := 0; i < concurrency; i++ {
@@ -285,6 +291,14 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 							httpErrors[k] = &httpErrCount{err: he, count: 0}
 						}
 						httpErrors[k].count++
+					}
+					var tce *TCPError
+					if errors.As(err, &tce) {
+						k := tce.Category
+						if _, exists := tcpErrors[k]; !exists {
+							tcpErrors[k] = &tcpErrCount{err: tce, count: 0}
+						}
+						tcpErrors[k].count++
 					}
 					errMu.Unlock()
 				} else {
@@ -334,6 +348,13 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 		fmt.Fprintf(stderr, "\nHTTP Errors:\n")
 		for cat, hec := range httpErrors {
 			fmt.Fprintf(stderr, "  - %s: %d\n", cat, hec.count)
+		}
+	}
+
+	if opts.Report && len(tcpErrors) > 0 {
+		fmt.Fprintf(stderr, "\nTCP Errors:\n")
+		for cat, tec := range tcpErrors {
+			fmt.Fprintf(stderr, "  - %s: %d\n", cat, tec.count)
 		}
 	}
 

@@ -128,3 +128,28 @@ func NewHTTPError(category string, err error) *HTTPError {
 		Err:      err,
 	}
 }
+
+// TCPError represents a structured error that occurs during TCP builtin execution.
+type TCPError struct {
+	Category string
+	Err      error
+}
+
+func (e *TCPError) Error() string {
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return e.Category
+}
+
+func (e *TCPError) Unwrap() error {
+	return e.Err
+}
+
+// NewTCPError creates a new TCPError with the given category and wrapped error.
+func NewTCPError(category string, err error) *TCPError {
+	return &TCPError{
+		Category: category,
+		Err:      err,
+	}
+}
