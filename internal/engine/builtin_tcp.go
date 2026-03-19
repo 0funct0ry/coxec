@@ -26,6 +26,23 @@ func (c *TCPClient) Name() string {
 	return "tcp"
 }
 
+// Help returns the help string for the tcp built-in.
+func (c *TCPClient) Help() string {
+	return `tcp [HOST] [PORT] [flags]
+
+Natively executes TCP connections without spawning a shell.
+
+Flags:
+  -d, --body string     Payload to send after connecting
+      --timeout duration Connection timeout (default 10s)
+  -o, --output string   Output format: text, json, jsonl (default "text")
+
+Examples:
+  tcp localhost 8080
+  tcp example.com 443 --timeout 5s
+  tcp 127.0.0.1 9000 --body "PING" --output json`
+}
+
 type tcpOutputFormat string
 
 const (

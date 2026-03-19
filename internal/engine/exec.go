@@ -126,13 +126,6 @@ func RunPipeline(task Task, opts ExecOptions) error {
 					Prev:      prevResult,
 				})
 				stepDuration = time.Since(stepStart)
-			} else if isReservedBuiltinPrefix(cmdName) {
-				registered := strings.Join(opts.Registry.Names(), ", ")
-				if registered == "" {
-					registered = "none"
-				}
-				err = fmt.Errorf("unknown built-in command '%s'. Currently supported built-ins: %s", cmdName, registered)
-				stepDuration = time.Since(stepStart)
 			}
 		}
 
@@ -379,14 +372,3 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 	return nil
 }
 
-// isReservedBuiltinPrefix checks if a command name looks like it was intended to be a built-in
-// but isn't currently registered. This prevents confusing shell fallbacks for typos.
-func isReservedBuiltinPrefix(name string) bool {
-	// A curated list of prefixes we might want to reserve for future built-ins,
-	// or common built-ins that a user might typo.
-	switch name {
-	case "http", "https", "tcp", "udp", "dns", "sql", "redis", "grpc", "ws", "amqp", "kafka", "sleep":
-		return true
-	}
-	return false
-}

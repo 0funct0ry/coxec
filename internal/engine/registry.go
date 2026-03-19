@@ -8,6 +8,7 @@ import (
 type BuiltinClient interface {
 	Name() string
 	Execute(ctx context.Context, args []string, data IterationData) (*Result, error)
+	Help() string
 }
 
 // Result represents the outcome of a pipeline step
@@ -49,4 +50,21 @@ func (r *BuiltinRegistry) Names() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// Help returns the help string for a built-in client by name
+func (r *BuiltinRegistry) Help(name string) (string, bool) {
+	if c, ok := r.builtins[name]; ok {
+		return c.Help(), true
+	}
+	return "", false
+}
+
+// AllHelp returns a map of all registered built-in client help strings
+func (r *BuiltinRegistry) AllHelp() map[string]string {
+	help := make(map[string]string)
+	for name, c := range r.builtins {
+		help[name] = c.Help()
+	}
+	return help
 }

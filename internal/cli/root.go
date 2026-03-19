@@ -128,10 +128,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			return fmt.Errorf("iterations (-n) must be greater than or equal to 0")
 		}
 
-		registry := engine.NewBuiltinRegistry()
-		registry.Register(engine.NewHTTPClient())
-		registry.Register(engine.NewTCPClient())
-		registry.Register(engine.NewSleepClient())
+		registry := getBuiltinRegistry()
 
 		templateState := engine.NewTemplateState()
 
@@ -349,6 +346,39 @@ func init() {
 	rootCmd.Flags().IntP("iterations", "n", -1, "Total number of executions (defaults to concurrency)")
 	rootCmd.Flags().StringArray("var", nil, "Set user variables (key=value)")
 	rootCmd.Flags().Bool("json", false, "Output validation errors as JSON")
+
+	// Register built-in client subcommands for help and discovery
+	registry := getBuiltinRegistry()
+	builtinGroup := &cobra.Group{ID: "builtins", Title: "Available Built-in clients:"}
+	rootCmd.AddGroup(builtinGroup)
+
+	for name, helpText := range registry.AllHelp() {
+		builtinCmd := &cobra.Command{
+			Use:     name,
+			Short:   fmt.Sprintf("Help for %s built-in client", name),
+			Long:    helpText,
+			GroupID: builtinGroup.ID,
+			Run: func(cmd *cobra.Command, args []string) {
+				fmt.Printf("Built-in client: %s\n", cmd.Name())
+				fmt.Println("To execute this built-in, use the -e, -f, or -t flags.")
+				fmt.Printf("Example: coxec -e '%s GET https://api.example.com'\n", cmd.Name())
+				fmt.Println()
+				fmt.Print(cmd.Long)
+				if !strings.HasSuffix(cmd.Long, "\n") {
+					fmt.Println()
+				}
+			},
+		}
+		rootCmd.AddCommand(builtinCmd)
+	}
+}
+
+func getBuiltinRegistry() *engine.BuiltinRegistry {
+	registry := engine.NewBuiltinRegistry()
+	registry.Register(engine.NewHTTPClient())
+	registry.Register(engine.NewTCPClient())
+	registry.Register(engine.NewSleepClient())
+	return registry
 }
 
 // Execute runs the root command

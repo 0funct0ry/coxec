@@ -33,6 +33,26 @@ func (c *HTTPClient) Name() string {
 	return "http"
 }
 
+// Help returns the help string for the http built-in.
+func (c *HTTPClient) Help() string {
+	return `http [METHOD] [URL] [flags]
+
+Natively executes HTTP requests without spawning a shell.
+
+Methods:
+  GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS
+
+Flags:
+  -H, --header stringArray   Custom HTTP headers (e.g. "Authorization: Bearer token")
+  -d, --body string          HTTP request body
+  -o, --output string        Output format: text, json, jsonl (default "text")
+
+Examples:
+  http GET https://api.example.com/users/1
+  http POST https://api.example.com/data --body '{"score": 100}'
+  http GET https://api.example.com/stats --output json`
+}
+
 // stringSliceFlag is a custom flag.Value that allows multiple --header flags
 type stringSliceFlag []string
 
