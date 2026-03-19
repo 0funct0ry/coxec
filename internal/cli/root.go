@@ -75,10 +75,10 @@ Execution source (exactly one required):
   -t, --template string  Path to Go template file defining the execution plan
 
 Built-in clients execute natively without spawning a shell:
-  http                   Execute HTTP requests natively
-  tcp                    Execute TCP connections natively
-  sleep                  Pause execution for a duration
-  (Unknown commands fall back to shell execution)
+  .http                  Execute HTTP requests natively
+  .tcp                   Execute TCP connections natively
+  .sleep                 Pause execution for a duration
+  (Names starting with '.' are recognized as built-ins; others fall back to shell)
 
 By default: only command stdout appears on stdout; summary and diagnostics go to stderr.
 Use -v / --verbose to see detailed per-execution information on stderr.
@@ -362,6 +362,7 @@ func init() {
 				fmt.Printf("Built-in client: %s\n", cmd.Name())
 				fmt.Println("To execute this built-in, use the -e, -f, or -t flags.")
 				fmt.Printf("Example: coxec -e '%s GET https://api.example.com'\n", cmd.Name())
+				fmt.Println("Note: Built-in names are prefixed with a dot to prevent shell conflicts.")
 				fmt.Println()
 				fmt.Print(cmd.Long)
 				if !strings.HasSuffix(cmd.Long, "\n") {

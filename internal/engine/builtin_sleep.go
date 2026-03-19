@@ -16,12 +16,12 @@ func NewSleepClient() *SleepClient {
 
 // Name returns the name of the built-in client.
 func (c *SleepClient) Name() string {
-	return "sleep"
+	return ".sleep"
 }
 
 // Help returns the help string for the sleep built-in.
 func (c *SleepClient) Help() string {
-	return `sleep [DURATION]
+	return `.sleep [DURATION]
 
 Pauses execution for a given duration.
 
@@ -29,14 +29,14 @@ Duration:
   A Go-style duration string (e.g. 1s, 500ms, 1.5m).
 
 Examples:
-  sleep 1s
-  sleep 500ms`
+  .sleep 1s
+  .sleep 500ms`
 }
 
 // Execute pauses execution for the duration specified in the first argument.
 func (c *SleepClient) Execute(ctx context.Context, args []string, data IterationData) (*Result, error) {
 	if len(args) == 0 {
-		return nil, fmt.Errorf("sleep requires a duration (e.g. 1.5s, 750ms)")
+		return nil, fmt.Errorf(".sleep requires a duration (e.g. 1.5s, 750ms)")
 	}
 
 	duration, err := time.ParseDuration(args[0])

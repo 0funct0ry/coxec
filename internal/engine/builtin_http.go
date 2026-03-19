@@ -30,12 +30,12 @@ func NewHTTPClient() *HTTPClient {
 
 // Name returns the name of the built-in client.
 func (c *HTTPClient) Name() string {
-	return "http"
+	return ".http"
 }
 
 // Help returns the help string for the http built-in.
 func (c *HTTPClient) Help() string {
-	return `http [METHOD] [URL] [flags]
+	return `.http [METHOD] [URL] [flags]
 
 Natively executes HTTP requests without spawning a shell.
 
@@ -48,9 +48,9 @@ Flags:
   -o, --output string        Output format: text, json, jsonl (default "text")
 
 Examples:
-  http GET https://api.example.com/users/1
-  http POST https://api.example.com/data --body '{"score": 100}'
-  http GET https://api.example.com/stats --output json`
+  .http GET https://api.example.com/users/1
+  .http POST https://api.example.com/data --body '{"score": 100}'
+  .http GET https://api.example.com/stats --output json`
 }
 
 // stringSliceFlag is a custom flag.Value that allows multiple --header flags
@@ -104,7 +104,7 @@ func (c *HTTPClient) Execute(ctx context.Context, args []string, data IterationD
 		}
 	}
 	if len(positionalArgs) < 2 {
-		return nil, fmt.Errorf("http requires at least METHOD and URL. Usage: http [METHOD] [URL] [flags]")
+		return nil, fmt.Errorf(".http requires at least METHOD and URL. Usage: .http [METHOD] [URL] [flags]")
 	}
 
 	method := strings.ToUpper(positionalArgs[0])

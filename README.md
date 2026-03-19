@@ -73,8 +73,8 @@ Use `-t` for multi-step execution plans or complex data handling:
 
 ```gotemplate
 # smoke-test.tmpl
-http GET https://api.example.com/users/{{randInt 1 100}}
-  |> http POST https://api.example.com/logs
+.http GET https://api.example.com/users/{{randInt 1 100}}
+  |> .http POST https://api.example.com/logs
      --body {"user_id": "{{.Prev.ID}}", "status": "verified"}
 ```
 
@@ -128,12 +128,12 @@ All execution flags support Go templates (`text/template`) with the following co
 
 **Random Load Generation**:
 ```bash
-coxec -c 10 -n 100 -e 'http POST https://api.example.com/users --body {"name": "{{randName}}", "email": "{{randEmail}}", "phone": "{{randPhone}}"}'
+coxec -c 10 -n 100 -e '.http POST https://api.example.com/users --body {"name": "{{randName}}", "email": "{{randEmail}}", "phone": "{{randPhone}}"}'
 ```
 
 **Sequential Batch Processing**:
 ```bash
-coxec -c 5 -n 1000 -e 'http PUT https://api.example.com/items/{{fileLine "ids.txt"}} --body {"status": "active"}'
+coxec -c 5 -n 1000 -e '.http PUT https://api.example.com/items/{{fileLine "ids.txt"}} --body {"status": "active"}'
 ```
 
 **Custom Identification**:

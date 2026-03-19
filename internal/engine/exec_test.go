@@ -298,3 +298,40 @@ func TestUUIDFormat(t *testing.T) {
 		t.Errorf("expected %q to match UUID v4 format", testUUID)
 	}
 }
+func TestRunPipeline_BuiltinVsShell(t *testing.T) {
+	registry := engine.NewBuiltinRegistry()
+	registry.Register(engine.NewSleepClient()) // Registered as .sleep
+
+	var stdout, stderr bytes.Buffer
+	opts := engine.ExecOptions{
+		Registry:      registry,
+		Stdout:        &stdout,
+		Stderr:        &stderr,
+		TotalTasks:    1,
+		TemplateState: engine.NewTemplateState(),
+	}
+
+	// 1. Dotted name should use built-in. .sleep is transparent, so no stdout.
+	taskBuiltin := engine.Task{Index: 1, Command: ".sleep 10ms"}
+	err := engine.RunPipeline(taskBuiltin, opts)
+	if err != nil {
+		t.Fatalf("expected no error from .sleep built-in, got %v", err)
+	}
+	if stdout.Len() > 0 {
+		t.Errorf("expected no stdout from .sleep built-in, got %q", stdout.String())
+	}
+
+	// 2. Unprefixed 'sleep' should fall through to shell. Shell 'sleep' produces no stdout but takes time.
+	// To verify it's shell, we can use a shell-specific command or check if it actually executed.
+	// Actually, if it falls through to shell, it will execute `sh -c 'sleep 0.01'`.
+	taskShell := engine.Task{Index: 1, Command: "sleep 0.01"}
+	start := time.Now()
+	err = engine.RunPipeline(taskShell, opts)
+	if err != nil {
+		t.Fatalf("expected no error from shell sleep fallthrough, got %v", err)
+	}
+	duration := time.Since(start)
+	if duration < 10*time.Millisecond {
+		t.Errorf("expected shell sleep to take at least 10ms, took %v", duration)
+	}
+}

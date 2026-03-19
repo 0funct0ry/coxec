@@ -114,7 +114,7 @@ func TestHTTPClient_Execute(t *testing.T) {
 			name: "Missing args",
 			args: []string{"GET"},
 			wantErr: true,
-			errContains: "requires at least METHOD and URL",
+			errContains: ".http requires at least METHOD and URL",
 		},
 	}
 

@@ -74,6 +74,9 @@ func RunPipeline(task Task, opts ExecOptions) error {
 	if opts.Stderr == nil {
 		opts.Stderr = os.Stderr
 	}
+	if opts.Context == nil {
+		opts.Context = context.Background()
+	}
 
 	if task.Timestamp.IsZero() {
 		task.Timestamp = time.Now()
