@@ -65,6 +65,7 @@ type ExecOptions struct {
 	Registry      *BuiltinRegistry
 	TemplateState *TemplateState
 	Timeout       time.Duration
+	Delay         time.Duration
 }
 
 // RunPipeline executes a series of pipeline steps

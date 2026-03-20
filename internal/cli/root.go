@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/0funct0ry/coxec/internal/engine"
 	"github.com/spf13/cobra"
@@ -103,6 +104,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 		iterations, _ := cmd.Flags().GetInt("iterations")
 		timeout, _ := cmd.Flags().GetDuration("timeout")
 		globalTimeout, _ := cmd.Flags().GetDuration("global-timeout")
+		delay, _ := cmd.Flags().GetDuration("delay")
 		userVarsRaw, _ := cmd.Flags().GetStringArray("var")
 		userVars, err := parseUserVars(userVarsRaw)
 		if err != nil {
@@ -157,19 +159,6 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			}
 
 			tasks := make(chan engine.Task, actualConcurrency)
-
-			go func() {
-				for i := 0; i < iterations; i++ {
-					select {
-					case <-ctx.Done():
-						close(tasks)
-						return
-					case tasks <- engine.Task{Index: i + 1, Command: executeCmd}:
-					}
-				}
-				close(tasks)
-			}()
-
 			opts := engine.ExecOptions{
 				Verbose:       verboseFlag,
 				Silent:        silentFlag,
@@ -182,7 +171,26 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				Registry:      registry,
 				TemplateState: templateState,
 				Timeout:       timeout,
+				Delay:         delay,
 			}
+
+			go func() {
+				defer close(tasks)
+				for i := 0; i < iterations; i++ {
+					if i > 0 && delay > 0 {
+						select {
+						case <-ctx.Done():
+							return
+						case <-time.After(delay):
+						}
+					}
+					select {
+					case <-ctx.Done():
+						return
+					case tasks <- engine.Task{Index: i + 1, Command: executeCmd, Timestamp: time.Now()}:
+					}
+				}
+			}()
 
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
 		}
@@ -218,19 +226,6 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			}
 
 			tasks := make(chan engine.Task, actualConcurrency)
-
-			go func() {
-				for i := 0; i < iterations; i++ {
-					select {
-					case <-ctx.Done():
-						close(tasks)
-						return
-					case tasks <- engine.Task{Index: i + 1, Command: string(scriptContent)}:
-					}
-				}
-				close(tasks)
-			}()
-
 			opts := engine.ExecOptions{
 				Verbose:       verboseFlag,
 				Silent:        silentFlag,
@@ -243,7 +238,26 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				Registry:      registry,
 				TemplateState: templateState,
 				Timeout:       timeout,
+				Delay:         delay,
 			}
+
+			go func() {
+				defer close(tasks)
+				for i := 0; i < iterations; i++ {
+					if i > 0 && delay > 0 {
+						select {
+						case <-ctx.Done():
+							return
+						case <-time.After(delay):
+						}
+					}
+					select {
+					case <-ctx.Done():
+						return
+					case tasks <- engine.Task{Index: i + 1, Command: string(scriptContent), Timestamp: time.Now()}:
+					}
+				}
+			}()
 
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
 		}
@@ -310,19 +324,6 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			}
 
 			tasks := make(chan engine.Task, actualConcurrency)
-
-			go func() {
-				for i := 0; i < iterations; i++ {
-					select {
-					case <-ctx.Done():
-						close(tasks)
-						return
-					case tasks <- engine.Task{Index: i + 1, Command: string(tplContent)}:
-					}
-				}
-				close(tasks)
-			}()
-
 			opts := engine.ExecOptions{
 				Verbose:       verboseFlag,
 				Silent:        silentFlag,
@@ -333,8 +334,28 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				Stderr:        os.Stderr,
 				UserVars:      userVars,
 				Registry:      registry,
+				TemplateState: templateState,
 				Timeout:       timeout,
+				Delay:         delay,
 			}
+
+			go func() {
+				defer close(tasks)
+				for i := 0; i < iterations; i++ {
+					if i > 0 && delay > 0 {
+						select {
+						case <-ctx.Done():
+							return
+						case <-time.After(delay):
+						}
+					}
+					select {
+					case <-ctx.Done():
+						return
+					case tasks <- engine.Task{Index: i + 1, Command: string(tplContent), Timestamp: time.Now()}:
+					}
+				}
+			}()
 
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
 		}
@@ -355,6 +376,7 @@ func init() {
 	rootCmd.Flags().IntP("iterations", "n", -1, "Total number of executions (defaults to concurrency)")
 	rootCmd.Flags().Duration("timeout", 0, "Maximum allowed duration for each individual execution (e.g. 5s, 100ms)")
 	rootCmd.Flags().Duration("global-timeout", 0, "Maximum total wall-clock time for the entire run (e.g. 15m, 1h)")
+	rootCmd.Flags().Duration("delay", 0, "Fixed delay between worker starts (e.g. 400ms, 1s)")
 	rootCmd.Flags().StringArray("var", nil, "Set user variables (key=value)")
 	rootCmd.Flags().Bool("json", false, "Output validation errors as JSON")
 
