@@ -64,6 +64,7 @@ type ExecOptions struct {
 	}
 	Registry      *BuiltinRegistry
 	TemplateState *TemplateState
+	Timeout       time.Duration
 }
 
 // RunPipeline executes a series of pipeline steps
@@ -83,6 +84,17 @@ func RunPipeline(task Task, opts ExecOptions) error {
 	}
 	if task.UUID == "" {
 		task.UUID = generateUUIDv4()
+	}
+
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if opts.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
+		defer cancel()
 	}
 
 	const rfc3339Milli = "2006-01-02T15:04:05.000Z07:00"
@@ -122,7 +134,7 @@ func RunPipeline(task Task, opts ExecOptions) error {
 
 		if opts.Registry != nil {
 			if builtin, ok := opts.Registry.Get(cmdName); ok {
-				currentResult, err = builtin.Execute(opts.Context, args, IterationData{
+				currentResult, err = builtin.Execute(ctx, args, IterationData{
 					Iteration: task.Index - 1,
 					WorkerID:  task.WorkerID,
 					UserVars:  opts.UserVars,
@@ -134,7 +146,7 @@ func RunPipeline(task Task, opts ExecOptions) error {
 
 		if currentResult == nil && err == nil {
 			// Fall through to shell
-			currentResult, err = runShellStep(renderedStep, task.Index)
+			currentResult, err = runShellStep(ctx, renderedStep, task.Index)
 			stepDuration = time.Since(stepStart)
 		}
 
@@ -189,6 +201,9 @@ func RunPipeline(task Task, opts ExecOptions) error {
 		outputMu.Unlock()
 
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			return err
 		}
 		prevResult = currentResult
@@ -197,8 +212,8 @@ func RunPipeline(task Task, opts ExecOptions) error {
 	return nil
 }
 
-func runShellStep(command string, taskIndex int) (*Result, error) {
-	cmd := exec.Command("sh", "-c", command)
+func runShellStep(ctx context.Context, command string, taskIndex int) (*Result, error) {
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Env = append(os.Environ(), fmt.Sprintf("COXEC_INDEX=%d", taskIndex))
 
@@ -242,6 +257,8 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 	}
 	templateErrors := make(map[string]*tempErrCount)
 
+	var timeoutCount int
+
 	type httpErrCount struct {
 		err   *HTTPError
 		count int
@@ -272,6 +289,9 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 					errMu.Lock()
 					if firstErr == nil {
 						firstErr = err
+					}
+					if errors.Is(err, context.DeadlineExceeded) {
+						timeoutCount++
 					}
 					if te, ok := err.(*TemplateError); ok {
 						k := te.Error()
@@ -327,6 +347,9 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 		fmt.Fprintf(stderr, "Success: %d   Failed: %d\n", successCount.Load(), failCount.Load())
 		if rate > 0 {
 			fmt.Fprintf(stderr, "Rate: ~%.1f executions/sec\n", rate)
+		}
+		if timeoutCount > 0 {
+			fmt.Fprintf(stderr, "Timeouts: %d\n", timeoutCount)
 		}
 	}
 

@@ -335,3 +335,25 @@ func TestRunPipeline_BuiltinVsShell(t *testing.T) {
 		t.Errorf("expected shell sleep to take at least 10ms, took %v", duration)
 	}
 }
+
+func TestRunPipeline_Timeout(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	opts := engine.ExecOptions{
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+		TotalTasks: 1,
+		Timeout:    10 * time.Millisecond,
+	}
+
+	// This command takes 100ms, but timeout is 10ms
+	task := engine.Task{Index: 1, Command: "sleep 0.1"}
+	err := engine.RunPipeline(task, opts)
+
+	if err == nil {
+		t.Fatal("expected error due to timeout, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "deadline exceeded") {
+		t.Errorf("expected deadline exceeded error, got: %v", err)
+	}
+}

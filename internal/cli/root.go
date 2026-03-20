@@ -101,6 +101,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 		templateFlag, _ := cmd.Flags().GetString("template")
 		concurrency, _ := cmd.Flags().GetInt("concurrency")
 		iterations, _ := cmd.Flags().GetInt("iterations")
+		timeout, _ := cmd.Flags().GetDuration("timeout")
 		userVarsRaw, _ := cmd.Flags().GetStringArray("var")
 		userVars, err := parseUserVars(userVarsRaw)
 		if err != nil {
@@ -171,6 +172,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				UserVars:      userVars,
 				Registry:      registry,
 				TemplateState: templateState,
+				Timeout:       timeout,
 			}
 
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
@@ -233,6 +235,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				UserVars:      userVars,
 				Registry:      registry,
 				TemplateState: templateState,
+				Timeout:       timeout,
 			}
 
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
@@ -325,6 +328,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				Stderr:        os.Stderr,
 				UserVars:      userVars,
 				Registry:      registry,
+				Timeout:       timeout,
 			}
 
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
@@ -344,6 +348,7 @@ func init() {
 	rootCmd.Flags().StringP("template", "t", "", "Path to Go template file defining the execution plan")
 	rootCmd.Flags().IntP("concurrency", "c", 1, "Number of concurrent executions")
 	rootCmd.Flags().IntP("iterations", "n", -1, "Total number of executions (defaults to concurrency)")
+	rootCmd.Flags().Duration("timeout", 0, "Maximum allowed duration for each individual execution (e.g. 5s, 100ms)")
 	rootCmd.Flags().StringArray("var", nil, "Set user variables (key=value)")
 	rootCmd.Flags().Bool("json", false, "Output validation errors as JSON")
 
