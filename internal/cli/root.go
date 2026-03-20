@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"math/rand/v2"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -108,6 +109,11 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 		globalTimeout, _ := cmd.Flags().GetDuration("global-timeout")
 		delay, _ := cmd.Flags().GetDuration("delay")
 		jitter, _ := cmd.Flags().GetDuration("jitter")
+		rateFlag, _ := cmd.Flags().GetString("rate")
+		rateLimit, err := parseRate(rateFlag)
+		if err != nil {
+			return err
+		}
 		userVarsRaw, _ := cmd.Flags().GetStringArray("var")
 		userVars, err := parseUserVars(userVarsRaw)
 		if err != nil {
@@ -182,38 +188,10 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				Jitter:        jitter,
 				RampUp:        rampup,
 				ActiveCount:   &activeCount,
+				RateLimit:     rateLimit,
 			}
 
-			go func() {
-				defer close(tasks)
-				for i := 0; i < iterations; i++ {
-					if i > 0 && (delay > 0 || jitter > 0) {
-						appliedDelay := delay
-						if jitter > 0 {
-							// Uniformly between [delay - jitter, delay + jitter]
-							jf := float64(jitter)
-							randomJitter := time.Duration(jf * (2*rand.Float64() - 1))
-							appliedDelay += randomJitter
-							if appliedDelay < 0 {
-								appliedDelay = 0
-							}
-						}
-
-						if appliedDelay > 0 {
-							select {
-							case <-ctx.Done():
-								return
-							case <-time.After(appliedDelay):
-							}
-						}
-					}
-					select {
-					case <-ctx.Done():
-						return
-					case tasks <- engine.Task{Index: i + 1, Command: executeCmd, Timestamp: time.Now()}:
-					}
-				}
-			}()
+			startTaskGenerator(ctx, tasks, iterations, executeCmd, delay, jitter, rateLimit, verboseFlag)
 
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
 		}
@@ -264,37 +242,10 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				Delay:         delay,
 				RampUp:        rampup,
 				ActiveCount:   &activeCount,
+				RateLimit:     rateLimit,
 			}
 
-			go func() {
-				defer close(tasks)
-				for i := 0; i < iterations; i++ {
-					if i > 0 && (delay > 0 || jitter > 0) {
-						appliedDelay := delay
-						if jitter > 0 {
-							jf := float64(jitter)
-							randomJitter := time.Duration(jf * (2*rand.Float64() - 1))
-							appliedDelay += randomJitter
-							if appliedDelay < 0 {
-								appliedDelay = 0
-							}
-						}
-
-						if appliedDelay > 0 {
-							select {
-							case <-ctx.Done():
-								return
-							case <-time.After(appliedDelay):
-							}
-						}
-					}
-					select {
-					case <-ctx.Done():
-						return
-					case tasks <- engine.Task{Index: i + 1, Command: string(scriptContent), Timestamp: time.Now()}:
-					}
-				}
-			}()
+			startTaskGenerator(ctx, tasks, iterations, string(scriptContent), delay, jitter, rateLimit, verboseFlag)
 
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
 		}
@@ -376,37 +327,10 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				Delay:         delay,
 				RampUp:        rampup,
 				ActiveCount:   &activeCount,
+				RateLimit:     rateLimit,
 			}
 
-			go func() {
-				defer close(tasks)
-				for i := 0; i < iterations; i++ {
-					if i > 0 && (delay > 0 || jitter > 0) {
-						appliedDelay := delay
-						if jitter > 0 {
-							jf := float64(jitter)
-							randomJitter := time.Duration(jf * (2*rand.Float64() - 1))
-							appliedDelay += randomJitter
-							if appliedDelay < 0 {
-								appliedDelay = 0
-							}
-						}
-
-						if appliedDelay > 0 {
-							select {
-							case <-ctx.Done():
-								return
-							case <-time.After(appliedDelay):
-							}
-						}
-					}
-					select {
-					case <-ctx.Done():
-						return
-					case tasks <- engine.Task{Index: i + 1, Command: string(tplContent), Timestamp: time.Now()}:
-					}
-				}
-			}()
+			startTaskGenerator(ctx, tasks, iterations, string(tplContent), delay, jitter, rateLimit, verboseFlag)
 
 			return engine.RunJobPool(actualConcurrency, tasks, opts)
 		}
@@ -430,6 +354,7 @@ func init() {
 	rootCmd.Flags().Duration("delay", 0, "Fixed delay between worker starts (e.g. 400ms, 1s)")
 	rootCmd.Flags().Duration("jitter", 0, "Random jitter added to delay (e.g. 100ms). Final delay is delay ± jitter")
 	rootCmd.Flags().Duration("rampup", 0, "Gradually increase concurrency over this duration (e.g. 30s, 2m)")
+	rootCmd.Flags().String("rate", "", "Maximum rate of executions (e.g. 50/s, 100/m, 1/h)")
 	rootCmd.Flags().StringArray("var", nil, "Set user variables (key=value)")
 	rootCmd.Flags().Bool("json", false, "Output validation errors as JSON")
 
@@ -509,4 +434,90 @@ func parseUserVars(vars []string) (map[string]string, error) {
 		result[parts[0]] = parts[1]
 	}
 	return result, nil
+}
+
+func parseRate(s string) (float64, error) {
+	if s == "" {
+		return 0, nil
+	}
+	parts := strings.Split(s, "/")
+	val, err := strconv.ParseFloat(parts[0], 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid rate value: %w", err)
+	}
+	if len(parts) == 1 {
+		return val, nil // Default to per second
+	}
+	switch strings.ToLower(parts[1]) {
+	case "s", "sec", "second", "seconds":
+		return val, nil
+	case "m", "min", "minute", "minutes":
+		return val / 60.0, nil
+	case "h", "hr", "hour", "hours":
+		return val / 3600.0, nil
+	default:
+		return 0, fmt.Errorf("invalid rate unit: %s", parts[1])
+	}
+}
+
+func startTaskGenerator(ctx context.Context, tasks chan<- engine.Task, iterations int, command string, delay, jitter time.Duration, rateLimit float64, verbose bool) {
+	go func() {
+		defer close(tasks)
+		var lastStart time.Time
+
+		rateInterval := time.Duration(0)
+		if rateLimit > 0 {
+			rateInterval = time.Duration(float64(time.Second) / rateLimit)
+		}
+
+		for i := 0; i < iterations; i++ {
+			now := time.Now()
+			var waitDuration time.Duration
+
+			if i > 0 {
+				// 1. Calculate rate-based wait
+				if rateLimit > 0 {
+					target := lastStart.Add(rateInterval)
+					if target.After(now) {
+						waitDuration = target.Sub(now)
+					}
+				}
+
+				// 2. Calculate delay/jitter-based wait
+				if delay > 0 || jitter > 0 {
+					d := delay
+					if jitter > 0 {
+						jf := float64(jitter)
+						randomJitter := time.Duration(jf * (2*rand.Float64() - 1))
+						d += randomJitter
+						if d < 0 {
+							d = 0
+						}
+					}
+					if d > waitDuration {
+						waitDuration = d
+					}
+				}
+
+				if waitDuration > 0 {
+					if verbose {
+						fmt.Fprintf(os.Stderr, "Rate limiting: waiting %v...\n", waitDuration.Round(time.Millisecond))
+					}
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(waitDuration):
+						now = time.Now()
+					}
+				}
+			}
+
+			lastStart = now
+			select {
+			case <-ctx.Done():
+				return
+			case tasks <- engine.Task{Index: i + 1, Command: command, Timestamp: time.Now()}:
+			}
+		}
+	}()
 }

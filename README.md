@@ -5,12 +5,15 @@
 ## Features
 
 - Run `N` executions with `C` concurrent workers.
+- **Timing Control**: Set individual (`--timeout`) and global (`--global-timeout`) limits.
+- **Traffic Shaping**: Stagger worker starts with `--delay`, add `--jitter`, or use `--rampup`.
+- **Throttling**: Enforce maximum execution rates with `--rate` (e.g., `50/s`, `100/m`).
 - Powerful Go Template support in all execution modes.
 - Generate random test data (names, emails, phones, numbers).
 - Drive iterations from data files or sequences.
 - Per-execution verbose logging (duration, exit status) to stderr.
 - Stable per-run env var: `COXEC_INDEX=1..N`.
-- Exit codes that distinguish `all-failed` vs `partially-failed` runs.
+- Exit codes that distinguish `all-failed`, `partially-failed`, and `timeout` (124) runs.
 
 ## Install
 
@@ -87,9 +90,15 @@ coxec -t smoke-test.tmpl -c 10 -n 100
 - `-e, --exec string`: Shell command to execute repeatedly.
 - `-f, --file string`: Path to a file whose contents will be executed repeatedly.
 - `-t, --template string`: Path to a Go template file defining the execution plan.
-- `-c, --concurrency int`: Number of concurrent executions. (default: `1`)
-- `-n, --iterations int`: Total number of executions (defaults to `--concurrency` when not provided).
-- `--var key=value`: Set a user variable available as `{{.Var "key"}}`. Can be repeated.
+- `-c, --concurrency int`: Number of concurrent workers. (default: `1`)
+- `-n, --iterations int`: Total number of executions (defaults to `--concurrency`).
+- `--rate string`: Maximum execution rate (e.g., `50/s`, `10/m`, `1/h`).
+- `--timeout duration`: Max time for a *single* execution (e.g., `5s`, `500ms`).
+- `--global-timeout duration`: Max time for the *entire* run (e.g., `1h`, `15m`).
+- `--delay duration`: Fixed delay between starting each worker/iteration.
+- `--jitter duration`: Random variation added to delay (delay ± jitter).
+- `--rampup duration`: Gradually increase concurrency over this period.
+- `--var key=value`: Set a user variable available as `{{.Var "key"}}`.
 - `-v, --verbose`: Print per-execution timing and status to stderr.
 - `--silent`: Suppress the child stdout/stderr payload.
 - `--version`: Print the version and exit.
@@ -145,6 +154,38 @@ coxec -c 20 -n 100 -e 'echo "Starting iteration {{counter \"job\"}} with ID {{ul
 ```bash
 # Generate requests for pages 10, 15, 20, 25, 30
 coxec -n 5 -e 'curl https://api.example.com/search?page={{seq 10 100 5}}'
+```
+
+## Timing & Flow Control
+
+`coxec` provides precise control over how and when executions happen.
+
+### Rate Limiting
+Limit throughput to avoid overwhelming target systems:
+```bash
+# Aim for 50 requests per second across 20 workers
+coxec -c 20 -n 1000 --rate 50/s -e '.http GET https://api.example.com'
+```
+
+### Warm-up (Ramp-up)
+Avoid thundering herds by gradually increasing concurrency:
+```bash
+# Start 1 worker every 3 seconds until 10 are active
+coxec -c 10 -n 100 --rampup 30s -e '.http GET https://api.example.com'
+```
+
+### Timeouts
+Protect against hanging processes or slow APIs:
+```bash
+# Kill any task taking longer than 2s; stop the whole run after 5m
+coxec -n 100 --timeout 2s --global-timeout 5m -e 'sleep 10'
+```
+
+### Staggered Starts
+Add spacing and jitter between starts for realistic simulations:
+```bash
+# Space starts by 500ms ± 100ms
+coxec -c 5 -n 20 --delay 500ms --jitter 100ms -e 'echo "Starting..."'
 ```
 
 ## Output behavior

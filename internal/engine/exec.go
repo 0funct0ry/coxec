@@ -69,6 +69,7 @@ type ExecOptions struct {
 	Jitter        time.Duration
 	RampUp        time.Duration
 	ActiveCount   *atomic.Int32
+	RateLimit     float64 // executions per second, 0 means no limit
 }
 
 // RunPipeline executes a series of pipeline steps
@@ -370,7 +371,11 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 		fmt.Fprintf(stderr, "Completed %d executions in %.3fs\n", totalExecs, poolDuration.Seconds())
 		fmt.Fprintf(stderr, "Success: %d   Failed: %d\n", successCount.Load(), failCount.Load())
 		if rate > 0 {
-			fmt.Fprintf(stderr, "Rate: ~%.1f executions/sec\n", rate)
+			fmt.Fprintf(stderr, "Rate: ~%.1f executions/sec", rate)
+			if opts.RateLimit > 0 {
+				fmt.Fprintf(stderr, " (target: %.1f/s)", opts.RateLimit)
+			}
+			fmt.Fprintln(stderr)
 		}
 		if timeoutCount > 0 {
 			fmt.Fprintf(stderr, "Timeouts: %d\n", timeoutCount)
