@@ -2,12 +2,13 @@ package engine_test
 
 import (
 	"bytes"
+	"context"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/0funct0ry/coxec/internal/engine"
-	"regexp"
 )
 
 func TestRunJobPool_Success(t *testing.T) {
@@ -355,5 +356,39 @@ func TestRunPipeline_Timeout(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "deadline exceeded") {
 		t.Errorf("expected deadline exceeded error, got: %v", err)
+	}
+}
+
+func TestRunJobPool_GlobalTimeout(t *testing.T) {
+	tasks := make(chan engine.Task, 5)
+	for i := 0; i < 5; i++ {
+		tasks <- engine.Task{Index: i + 1, Command: "sleep 1"}
+	}
+	close(tasks)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	opts := engine.ExecOptions{
+		TotalTasks: 5,
+		Context:    ctx,
+	}
+
+	err := engine.RunJobPool(2, tasks, opts)
+	if err == nil {
+		t.Fatal("expected error due to global timeout, got nil")
+	}
+
+	exitErr, ok := err.(*engine.ExitError)
+	if !ok {
+		t.Fatalf("expected *engine.ExitError, got %T", err)
+	}
+
+	if exitErr.Code != 124 {
+		t.Errorf("expected exit code 124 for global timeout, got %v", exitErr.Code)
+	}
+
+	if !strings.Contains(exitErr.Error(), "global timeout reached") {
+		t.Errorf("expected error message to mention global timeout, got: %v", exitErr.Error())
 	}
 }

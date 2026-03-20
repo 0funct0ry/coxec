@@ -378,6 +378,9 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 	}
 
 	if opts.Context != nil && opts.Context.Err() != nil {
+		if errors.Is(opts.Context.Err(), context.DeadlineExceeded) {
+			return &ExitError{Code: 124, Err: fmt.Errorf("global timeout reached: %w", opts.Context.Err())}
+		}
 		return &ExitError{Code: 130, Err: opts.Context.Err()}
 	}
 

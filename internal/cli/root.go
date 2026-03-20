@@ -102,6 +102,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 		concurrency, _ := cmd.Flags().GetInt("concurrency")
 		iterations, _ := cmd.Flags().GetInt("iterations")
 		timeout, _ := cmd.Flags().GetDuration("timeout")
+		globalTimeout, _ := cmd.Flags().GetDuration("global-timeout")
 		userVarsRaw, _ := cmd.Flags().GetStringArray("var")
 		userVars, err := parseUserVars(userVarsRaw)
 		if err != nil {
@@ -133,6 +134,17 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 
 		templateState := engine.NewTemplateState()
 
+		// Set up global context with interrupt signal handling
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+
+		// If global timeout is set, wrap the context
+		if globalTimeout > 0 {
+			var globalCancel context.CancelFunc
+			ctx, globalCancel = context.WithTimeout(ctx, globalTimeout)
+			defer globalCancel()
+		}
+
 		if executeCmd != "" {
 			// Disable printing usage to avoid cluttering stderr on command failure
 			cmd.SilenceUsage = true
@@ -145,9 +157,6 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			}
 
 			tasks := make(chan engine.Task, actualConcurrency)
-
-			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-			defer cancel()
 
 			go func() {
 				for i := 0; i < iterations; i++ {
@@ -209,8 +218,6 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			}
 
 			tasks := make(chan engine.Task, actualConcurrency)
-			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-			defer cancel()
 
 			go func() {
 				for i := 0; i < iterations; i++ {
@@ -303,8 +310,6 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			}
 
 			tasks := make(chan engine.Task, actualConcurrency)
-			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-			defer cancel()
 
 			go func() {
 				for i := 0; i < iterations; i++ {
@@ -349,6 +354,7 @@ func init() {
 	rootCmd.Flags().IntP("concurrency", "c", 1, "Number of concurrent executions")
 	rootCmd.Flags().IntP("iterations", "n", -1, "Total number of executions (defaults to concurrency)")
 	rootCmd.Flags().Duration("timeout", 0, "Maximum allowed duration for each individual execution (e.g. 5s, 100ms)")
+	rootCmd.Flags().Duration("global-timeout", 0, "Maximum total wall-clock time for the entire run (e.g. 15m, 1h)")
 	rootCmd.Flags().StringArray("var", nil, "Set user variables (key=value)")
 	rootCmd.Flags().Bool("json", false, "Output validation errors as JSON")
 
