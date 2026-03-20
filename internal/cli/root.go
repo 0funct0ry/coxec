@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"math/rand/v2"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -113,6 +114,8 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			return err
 		}
 
+		rampup, _ := cmd.Flags().GetDuration("rampup")
+
 		if !cmd.Flags().Changed("iterations") {
 			iterations = concurrency
 		}
@@ -149,6 +152,8 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			defer globalCancel()
 		}
 
+		var activeCount atomic.Int32
+
 		if executeCmd != "" {
 			// Disable printing usage to avoid cluttering stderr on command failure
 			cmd.SilenceUsage = true
@@ -175,6 +180,8 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				Timeout:       timeout,
 				Delay:         delay,
 				Jitter:        jitter,
+				RampUp:        rampup,
+				ActiveCount:   &activeCount,
 			}
 
 			go func() {
@@ -255,6 +262,8 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				TemplateState: templateState,
 				Timeout:       timeout,
 				Delay:         delay,
+				RampUp:        rampup,
+				ActiveCount:   &activeCount,
 			}
 
 			go func() {
@@ -365,6 +374,8 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				TemplateState: templateState,
 				Timeout:       timeout,
 				Delay:         delay,
+				RampUp:        rampup,
+				ActiveCount:   &activeCount,
 			}
 
 			go func() {
@@ -418,6 +429,7 @@ func init() {
 	rootCmd.Flags().Duration("global-timeout", 0, "Maximum total wall-clock time for the entire run (e.g. 15m, 1h)")
 	rootCmd.Flags().Duration("delay", 0, "Fixed delay between worker starts (e.g. 400ms, 1s)")
 	rootCmd.Flags().Duration("jitter", 0, "Random jitter added to delay (e.g. 100ms). Final delay is delay ± jitter")
+	rootCmd.Flags().Duration("rampup", 0, "Gradually increase concurrency over this duration (e.g. 30s, 2m)")
 	rootCmd.Flags().StringArray("var", nil, "Set user variables (key=value)")
 	rootCmd.Flags().Bool("json", false, "Output validation errors as JSON")
 

@@ -67,6 +67,8 @@ type ExecOptions struct {
 	Timeout       time.Duration
 	Delay         time.Duration
 	Jitter        time.Duration
+	RampUp        time.Duration
+	ActiveCount   *atomic.Int32
 }
 
 // RunPipeline executes a series of pipeline steps
@@ -178,8 +180,12 @@ func RunPipeline(task Task, opts ExecOptions) error {
 				statusIndicator = "✗ error"
 			}
 			durationStr := stepDuration.Round(time.Millisecond).String()
-			fmt.Fprintf(opts.Stderr, "[%d/%d] %s   %s   %s\n",
-				task.Index, opts.TotalTasks, renderedStep, durationStr, statusIndicator)
+			activeInfo := ""
+			if opts.ActiveCount != nil {
+				activeInfo = fmt.Sprintf(" (active: %d)", opts.ActiveCount.Load())
+			}
+			fmt.Fprintf(opts.Stderr, "[%d/%d]%s %s   %s   %s\n",
+				task.Index, opts.TotalTasks, activeInfo, renderedStep, durationStr, statusIndicator)
 
 			if currentResult != nil && !currentResult.IsTransparent {
 				if len(currentResult.Stdout) > 0 && !opts.Silent {
@@ -274,12 +280,28 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 	tcpErrors := make(map[string]*tcpErrCount)
 
 	poolStart := time.Now()
+	interval := time.Duration(0)
+	if opts.RampUp > 0 && concurrency > 1 {
+		interval = opts.RampUp / time.Duration(concurrency-1)
+	}
 
 	for i := 0; i < concurrency; i++ {
+		if i > 0 && interval > 0 {
+			select {
+			case <-opts.Context.Done():
+				return opts.Context.Err()
+			case <-time.After(interval):
+			}
+		}
+
 		wg.Add(1)
 		workerID := i
 		go func(id int) {
 			defer wg.Done()
+			if opts.ActiveCount != nil {
+				opts.ActiveCount.Add(1)
+				defer opts.ActiveCount.Add(-1)
+			}
 			for task := range tasks {
 				if opts.Context != nil && opts.Context.Err() != nil {
 					continue
