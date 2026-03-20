@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/0funct0ry/coxec/internal/engine"
+	"github.com/0funct0ry/coxec/internal/server"
 	"github.com/spf13/cobra"
 )
 
@@ -23,7 +24,10 @@ var Version = "dev"
 
 const validationExitCode = 3
 
-func validateExecutionSource(executeCmd, fileFlag, templateFlag string) error {
+func validateExecutionSource(executeCmd, fileFlag, templateFlag string, serverFlag bool) error {
+	if serverFlag {
+		return nil
+	}
 	hasExec := executeCmd != ""
 	hasFile := fileFlag != ""
 	hasTemplate := templateFlag != ""
@@ -77,12 +81,17 @@ Execution source (exactly one required):
   -e, --exec string      Shell command or built-in to execute repeatedly
   -f, --file string      Path to shell script file to execute repeatedly
   -t, --template string  Path to Go template file defining the execution plan
+  -s, --server           Start as an HTTP server to execute commands remotely
 
 Built-in clients execute natively without spawning a shell:
   .http                  Execute HTTP requests natively
   .tcp                   Execute TCP connections natively
   .sleep                 Pause execution for a duration
   (Names starting with '.' are recognized as built-ins; others fall back to shell)
+
+Server-only flags (when using -s):
+  -a, --addr string      Bind address (default: 127.0.0.1)
+  -p, --port int         Listening port (default: 8080)
 
 By default: only command stdout appears on stdout; summary and diagnostics go to stderr.
 Use -v / --verbose to see detailed per-execution information on stderr.
@@ -99,6 +108,10 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			fmt.Printf("coxec version %s\n", Version)
 			return nil
 		}
+
+		serverFlag, _ := cmd.Flags().GetBool("server")
+		addr, _ := cmd.Flags().GetString("addr")
+		port, _ := cmd.Flags().GetInt("port")
 
 		executeCmd, _ := cmd.Flags().GetString("execute")
 		fileFlag, _ := cmd.Flags().GetString("file")
@@ -126,21 +139,8 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			iterations = concurrency
 		}
 
-		if err := validateExecutionSource(executeCmd, fileFlag, templateFlag); err != nil {
+		if err := validateExecutionSource(executeCmd, fileFlag, templateFlag, serverFlag); err != nil {
 			return err
-		}
-
-		if concurrency <= 0 {
-			return fmt.Errorf("concurrency (-c) must be greater than 0")
-		}
-
-		if iterations == 0 {
-			fmt.Fprintln(os.Stderr, "No executions requested (-n 0)")
-			return nil
-		}
-
-		if iterations < 0 {
-			return fmt.Errorf("iterations (-n) must be greater than or equal to 0")
 		}
 
 		registry := getBuiltinRegistry()
@@ -157,6 +157,26 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			ctx, globalCancel = context.WithTimeout(ctx, globalTimeout)
 			defer globalCancel()
 		}
+
+		if serverFlag {
+			s := server.NewServer(addr, port)
+			return s.Start(ctx)
+		}
+
+		if concurrency <= 0 {
+			return fmt.Errorf("concurrency (-c) must be greater than 0")
+		}
+
+		if iterations == 0 {
+			fmt.Fprintln(os.Stderr, "No executions requested (-n 0)")
+			return nil
+		}
+
+		if iterations < 0 {
+			return fmt.Errorf("iterations (-n) must be greater than or equal to 0")
+		}
+
+
 
 		var activeCount atomic.Int32
 
@@ -357,6 +377,9 @@ func init() {
 	rootCmd.Flags().String("rate", "", "Maximum rate of executions (e.g. 50/s, 100/m, 1/h)")
 	rootCmd.Flags().StringArray("var", nil, "Set user variables (key=value)")
 	rootCmd.Flags().Bool("json", false, "Output validation errors as JSON")
+	rootCmd.Flags().BoolP("server", "s", false, "Start coxec in server mode")
+	rootCmd.Flags().StringP("addr", "a", "127.0.0.1", "Bind address for the server")
+	rootCmd.Flags().IntP("port", "p", 8080, "Port to listen on")
 
 	// Register built-in client subcommands for help and discovery
 	registry := getBuiltinRegistry()

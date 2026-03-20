@@ -8,6 +8,7 @@
 - **Timing Control**: Set individual (`--timeout`) and global (`--global-timeout`) limits.
 - **Traffic Shaping**: Stagger worker starts with `--delay`, add `--jitter`, or use `--rampup`.
 - **Throttling**: Enforce maximum execution rates with `--rate` (e.g., `50/s`, `100/m`).
+- **Server Mode**: Start `coxec` as an HTTP execution service with `-s/--server`.
 - Powerful Go Template support in all execution modes.
 - Generate random test data (names, emails, phones, numbers).
 - Drive iterations from data files or sequences.
@@ -33,7 +34,7 @@ coxec --version
 
 ## Usage
 
-One of `-e/--exec`, `-f/--file`, or `-t/--template` is required (exactly one).
+One of `-e/--exec`, `-f/--file`, `-t/--template`, or `-s/--server` is required.
 
 ```sh
 coxec -e 'echo "hello from $COXEC_INDEX"' -c 4 -n 10
@@ -85,11 +86,21 @@ Use `-t` for multi-step execution plans or complex data handling:
 coxec -t smoke-test.tmpl -c 10 -n 100
 ```
 
+### Server Mode
+Start `coxec` as a long-running HTTP service:
+
+```bash
+coxec --server --port 9000
+```
+
 ## Flags
 
 - `-e, --exec string`: Shell command to execute repeatedly.
 - `-f, --file string`: Path to a file whose contents will be executed repeatedly.
 - `-t, --template string`: Path to a Go template file defining the execution plan.
+- `-s, --server`: Start `coxec` in server mode.
+- `-a, --addr string`: Bind address for the server (default: `127.0.0.1`).
+- `-p, --port int`: Port to listen on (default: `8080`).
 - `-c, --concurrency int`: Number of concurrent workers. (default: `1`)
 - `-n, --iterations int`: Total number of executions (defaults to `--concurrency`).
 - `--rate string`: Maximum execution rate (e.g., `50/s`, `10/m`, `1/h`).
