@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"math/rand/v2"
 	"strings"
 	"syscall"
 	"time"
@@ -105,6 +106,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 		timeout, _ := cmd.Flags().GetDuration("timeout")
 		globalTimeout, _ := cmd.Flags().GetDuration("global-timeout")
 		delay, _ := cmd.Flags().GetDuration("delay")
+		jitter, _ := cmd.Flags().GetDuration("jitter")
 		userVarsRaw, _ := cmd.Flags().GetStringArray("var")
 		userVars, err := parseUserVars(userVarsRaw)
 		if err != nil {
@@ -172,16 +174,30 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				TemplateState: templateState,
 				Timeout:       timeout,
 				Delay:         delay,
+				Jitter:        jitter,
 			}
 
 			go func() {
 				defer close(tasks)
 				for i := 0; i < iterations; i++ {
-					if i > 0 && delay > 0 {
-						select {
-						case <-ctx.Done():
-							return
-						case <-time.After(delay):
+					if i > 0 && (delay > 0 || jitter > 0) {
+						appliedDelay := delay
+						if jitter > 0 {
+							// Uniformly between [delay - jitter, delay + jitter]
+							jf := float64(jitter)
+							randomJitter := time.Duration(jf * (2*rand.Float64() - 1))
+							appliedDelay += randomJitter
+							if appliedDelay < 0 {
+								appliedDelay = 0
+							}
+						}
+
+						if appliedDelay > 0 {
+							select {
+							case <-ctx.Done():
+								return
+							case <-time.After(appliedDelay):
+							}
 						}
 					}
 					select {
@@ -244,11 +260,23 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			go func() {
 				defer close(tasks)
 				for i := 0; i < iterations; i++ {
-					if i > 0 && delay > 0 {
-						select {
-						case <-ctx.Done():
-							return
-						case <-time.After(delay):
+					if i > 0 && (delay > 0 || jitter > 0) {
+						appliedDelay := delay
+						if jitter > 0 {
+							jf := float64(jitter)
+							randomJitter := time.Duration(jf * (2*rand.Float64() - 1))
+							appliedDelay += randomJitter
+							if appliedDelay < 0 {
+								appliedDelay = 0
+							}
+						}
+
+						if appliedDelay > 0 {
+							select {
+							case <-ctx.Done():
+								return
+							case <-time.After(appliedDelay):
+							}
 						}
 					}
 					select {
@@ -342,11 +370,23 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			go func() {
 				defer close(tasks)
 				for i := 0; i < iterations; i++ {
-					if i > 0 && delay > 0 {
-						select {
-						case <-ctx.Done():
-							return
-						case <-time.After(delay):
+					if i > 0 && (delay > 0 || jitter > 0) {
+						appliedDelay := delay
+						if jitter > 0 {
+							jf := float64(jitter)
+							randomJitter := time.Duration(jf * (2*rand.Float64() - 1))
+							appliedDelay += randomJitter
+							if appliedDelay < 0 {
+								appliedDelay = 0
+							}
+						}
+
+						if appliedDelay > 0 {
+							select {
+							case <-ctx.Done():
+								return
+							case <-time.After(appliedDelay):
+							}
 						}
 					}
 					select {
@@ -377,6 +417,7 @@ func init() {
 	rootCmd.Flags().Duration("timeout", 0, "Maximum allowed duration for each individual execution (e.g. 5s, 100ms)")
 	rootCmd.Flags().Duration("global-timeout", 0, "Maximum total wall-clock time for the entire run (e.g. 15m, 1h)")
 	rootCmd.Flags().Duration("delay", 0, "Fixed delay between worker starts (e.g. 400ms, 1s)")
+	rootCmd.Flags().Duration("jitter", 0, "Random jitter added to delay (e.g. 100ms). Final delay is delay ± jitter")
 	rootCmd.Flags().StringArray("var", nil, "Set user variables (key=value)")
 	rootCmd.Flags().Bool("json", false, "Output validation errors as JSON")
 
