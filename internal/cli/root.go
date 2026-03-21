@@ -159,7 +159,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 		}
 
 		if serverFlag {
-			s := server.NewServer(addr, port)
+			s := server.NewServer(addr, port, Version)
 			return s.Start(ctx)
 		}
 

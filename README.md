@@ -93,6 +93,25 @@ Start `coxec` as a long-running HTTP service:
 coxec --server --port 9000
 ```
 
+#### Health Check
+Verify the server status using the `/health` endpoint:
+
+```bash
+curl http://localhost:8080/health
+```
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "version": "1.0.0",
+  "active_jobs": 2,
+  "uptime_seconds": 3600
+}
+```
+
+The endpoint returns `503 Service Unavailable` if the server is starting up or shutting down.
+
 ## Flags
 
 - `-e, --exec string`: Shell command to execute repeatedly.
