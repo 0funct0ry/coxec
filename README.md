@@ -93,6 +93,8 @@ Start `coxec` as a long-running HTTP service:
 coxec --server --port 9000
 ```
 
+> **Warning:** Starting the server without any authentication flags is insecure and should only be used for local testing. A warning message will be logged on startup.
+
 You can secure the `/exec` endpoint with a Bearer token:
 
 ```bash
