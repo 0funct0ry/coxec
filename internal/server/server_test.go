@@ -14,7 +14,7 @@ import (
 )
 
 func TestHealthCheck(t *testing.T) {
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", engine.NewBuiltinRegistry())
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", engine.NewBuiltinRegistry())
 	
 	t.Run("StatusStarting", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/health", nil)
@@ -93,7 +93,7 @@ func TestHealthCheck(t *testing.T) {
 func TestExecHandler(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
 	registry.Register(engine.NewSleepClient())
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", registry)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", registry)
 	s.Status = StatusReady
 
 	t.Run("ValidRequest", func(t *testing.T) {
@@ -304,7 +304,7 @@ func TestExecHandler(t *testing.T) {
 
 func TestExecHandlerWithAuth(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "super-secret", registry)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "super-secret", "", registry)
 	s.Status = StatusReady
 
 	validPayload := ExecRequest{
@@ -355,6 +355,76 @@ func TestExecHandlerWithAuth(t *testing.T) {
 
 	t.Run("CorrectToken", func(t *testing.T) {
 		req := makeReq("Bearer super-secret")
+		rr := httptest.NewRecorder()
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("expected status 200, got %d", rr.Code)
+		}
+	})
+}
+
+func TestExecHandlerWithBasicAuth(t *testing.T) {
+	registry := engine.NewBuiltinRegistry()
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "admin:secret", registry)
+	s.Status = StatusReady
+
+	validPayload := ExecRequest{
+		Exec:        "echo hello",
+		Concurrency: 1,
+		Iterations:  1,
+	}
+	bodyBytes, _ := json.Marshal(validPayload)
+
+	makeReq := func(authHeader string) *http.Request {
+		req := httptest.NewRequest("POST", "/exec", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("Content-Type", "application/json")
+		if authHeader != "" {
+			req.Header.Set("Authorization", authHeader)
+		}
+		return req
+	}
+
+	t.Run("MissingCredentials", func(t *testing.T) {
+		req := makeReq("")
+		rr := httptest.NewRecorder()
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("expected status 401, got %d", rr.Code)
+		}
+		if rr.Header().Get("WWW-Authenticate") != `Basic realm="Restricted"` {
+			t.Errorf("expected WWW-Authenticate header, got %q", rr.Header().Get("WWW-Authenticate"))
+		}
+	})
+
+	t.Run("MalformedCredentials", func(t *testing.T) {
+		req := makeReq("Basic notbase64!!!")
+		rr := httptest.NewRecorder()
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("expected status 401, got %d", rr.Code)
+		}
+		if rr.Header().Get("WWW-Authenticate") != `Basic realm="Restricted"` {
+			t.Errorf("expected WWW-Authenticate header, got %q", rr.Header().Get("WWW-Authenticate"))
+		}
+	})
+
+	t.Run("IncorrectCredentials", func(t *testing.T) {
+		// wrong:password base64 = d3Jvbmc6cGFzc3dvcmQ=
+		req := makeReq("Basic d3Jvbmc6cGFzc3dvcmQ=")
+		rr := httptest.NewRecorder()
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("expected status 401, got %d", rr.Code)
+		}
+	})
+
+	t.Run("CorrectCredentials", func(t *testing.T) {
+		// admin:secret base64 = YWRtaW46c2VjcmV0
+		req := makeReq("Basic YWRtaW46c2VjcmV0")
 		rr := httptest.NewRecorder()
 		s.execHandler(rr, req)
 
