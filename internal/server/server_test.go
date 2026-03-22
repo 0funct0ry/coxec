@@ -1,15 +1,20 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/0funct0ry/coxec/internal/engine"
 )
 
 func TestHealthCheck(t *testing.T) {
-	s := NewServer("127.0.0.1", 8080, "1.0.0")
+	s := NewServer("127.0.0.1", 8080, "1.0.0", engine.NewBuiltinRegistry())
 	
 	t.Run("StatusStarting", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/health", nil)
@@ -81,6 +86,218 @@ func TestHealthCheck(t *testing.T) {
 		}
 		if resp["status"] != "shutting_down" {
 			t.Errorf("expected status 'shutting_down', got '%s'", resp["status"])
+		}
+	})
+}
+
+func TestExecHandler(t *testing.T) {
+	registry := engine.NewBuiltinRegistry()
+	registry.Register(engine.NewSleepClient())
+	s := NewServer("127.0.0.1", 8080, "1.0.0", registry)
+	s.Status = StatusReady
+
+	t.Run("ValidRequest", func(t *testing.T) {
+		payload := ExecRequest{
+			Exec:        "echo hello",
+			Concurrency: 1,
+			Iterations:  1,
+		}
+		body, _ := json.Marshal(payload)
+		req := httptest.NewRequest("POST", "/exec", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		rr := httptest.NewRecorder()
+
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("expected status 200, got %d", rr.Code)
+		}
+
+		var resp ExecResponse
+		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to unmarshal response: %v", err)
+		}
+
+		if resp.Status != "ok" {
+			t.Errorf("expected status 'ok', got '%s'", resp.Status)
+		}
+		if resp.Report.TotalExecutions != 1 {
+			t.Errorf("expected 1 execution, got %d", resp.Report.TotalExecutions)
+		}
+		if len(resp.Report.Stdout) == 0 || !strings.Contains(resp.Report.Stdout[0], "hello") {
+			t.Errorf("expected stdout to contain 'hello', got %v", resp.Report.Stdout)
+		}
+	})
+
+	t.Run("MissingExec", func(t *testing.T) {
+		payload := ExecRequest{
+			Concurrency: 1,
+		}
+		body, _ := json.Marshal(payload)
+		req := httptest.NewRequest("POST", "/exec", bytes.NewBuffer(body))
+		rr := httptest.NewRecorder()
+
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("expected status 400, got %d", rr.Code)
+		}
+	})
+
+	t.Run("InvalidJSON", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/exec", strings.NewReader("invalid json"))
+		rr := httptest.NewRecorder()
+
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("expected status 400, got %d", rr.Code)
+		}
+	})
+
+	t.Run("ServerNotReady", func(t *testing.T) {
+		s.Status = StatusStarting
+		payload := ExecRequest{Exec: "echo 1"}
+		body, _ := json.Marshal(payload)
+		req := httptest.NewRequest("POST", "/exec", bytes.NewBuffer(body))
+		rr := httptest.NewRecorder()
+
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusServiceUnavailable {
+			t.Errorf("expected status 503, got %d", rr.Code)
+		}
+		s.Status = StatusReady // Restore for other tests
+	})
+
+	t.Run("VerboseRequest", func(t *testing.T) {
+		payload := ExecRequest{
+			Exec:        ".sleep 1ms",
+			Concurrency: 1,
+			Iterations:  2,
+			Verbose:     true,
+		}
+		body, _ := json.Marshal(payload)
+		req := httptest.NewRequest("POST", "/exec", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		rr := httptest.NewRecorder()
+
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("expected status 200, got %d", rr.Code)
+		}
+
+		var resp ExecResponse
+		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to unmarshal response: %v", err)
+		}
+
+		if len(resp.Report.Details) != 2 {
+			t.Errorf("expected 2 execution details, got %d", len(resp.Report.Details))
+		}
+		for i, detail := range resp.Report.Details {
+			if detail.Index != i+1 {
+				t.Errorf("detail %d: expected index %d, got %d", i, i+1, detail.Index)
+			}
+			if detail.Status != "success" {
+				t.Errorf("detail %d: expected status success, got %s", i, detail.Status)
+			}
+			if detail.Duration == "" {
+				t.Errorf("detail %d: expected non-empty duration", i)
+			}
+		}
+	})
+
+	t.Run("FormEncodedRequest", func(t *testing.T) {
+		form := url.Values{}
+		form.Add("exec", "echo hello")
+		form.Add("iterations", "1")
+		req := httptest.NewRequest("POST", "/exec", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rr := httptest.NewRecorder()
+
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("expected status 200, got %d", rr.Code)
+		}
+		if !strings.Contains(rr.Body.String(), "hello") {
+			t.Errorf("expected body to contain 'hello', got %q", rr.Body.String())
+		}
+		if rr.Header().Get("Content-Type") != "text/plain; charset=utf-8" {
+			t.Errorf("expected content-type text/plain, got %s", rr.Header().Get("Content-Type"))
+		}
+	})
+
+	t.Run("PlainTextResponseByDefault", func(t *testing.T) {
+		payload := ExecRequest{Exec: "echo hello", Iterations: 1}
+		body, _ := json.Marshal(payload)
+		req := httptest.NewRequest("POST", "/exec", bytes.NewBuffer(body))
+		// No Accept header, and no Content-Type on request (Wait, json.Marshal above doesn't set it)
+		rr := httptest.NewRecorder()
+
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("expected status 200, got %d", rr.Code)
+		}
+		if rr.Header().Get("Content-Type") != "text/plain; charset=utf-8" {
+			t.Errorf("expected content-type text/plain, got %s", rr.Header().Get("Content-Type"))
+		}
+	})
+
+	t.Run("JSONResponseIfExplicitlyRequested", func(t *testing.T) {
+		form := url.Values{}
+		form.Add("exec", "echo hello")
+		req := httptest.NewRequest("POST", "/exec", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Accept", "application/json")
+		rr := httptest.NewRecorder()
+
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("expected status 200, got %d", rr.Code)
+		}
+		if rr.Header().Get("Content-Type") != "application/json" {
+			t.Errorf("expected content-type application/json, got %s", rr.Header().Get("Content-Type"))
+		}
+	})
+
+	t.Run("StructuredExecRequest", func(t *testing.T) {
+		payload := map[string]interface{}{
+			"exec": map[string]interface{}{
+				"client": ".http",
+				"method": "POST",
+				"url":    "http://localhost:9090/post",
+				"body": map[string]interface{}{
+					"id": "123",
+				},
+			},
+			"iterations": 1,
+		}
+		body, _ := json.Marshal(payload)
+		req := httptest.NewRequest("POST", "/exec", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		rr := httptest.NewRecorder()
+
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("expected status 200, got %d", rr.Code)
+		}
+
+		var resp ExecResponse
+		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to unmarshal response: %v", err)
+		}
+
+		if resp.Status != "ok" {
+			t.Errorf("expected status 'ok', got '%s'", resp.Status)
 		}
 	})
 }

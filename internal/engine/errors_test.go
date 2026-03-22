@@ -108,7 +108,7 @@ func TestRunJobPoolTemplateErrorDedup(t *testing.T) {
 	}
 	close(tasks)
 
-	err := RunJobPool(2, tasks, opts)
+	_, err := RunJobPool(2, tasks, opts)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}

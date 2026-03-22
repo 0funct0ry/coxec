@@ -36,7 +36,8 @@ func TestRunJobPool_RampUp(t *testing.T) {
 	// Run in a goroutine so we can monitor activeCount
 	done := make(chan error, 1)
 	go func() {
-		done <- engine.RunJobPool(concurrency, tasks, opts)
+		_, err := engine.RunJobPool(concurrency, tasks, opts)
+		done <- err
 	}()
 
 	// Monitor active count

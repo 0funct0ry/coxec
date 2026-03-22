@@ -33,3 +33,4 @@ go.work.sum
 internal-docs/
 GEMINI.md
 bin/
+coxec

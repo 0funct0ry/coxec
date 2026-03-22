@@ -19,7 +19,7 @@ func TestRunJobPool_Success(t *testing.T) {
 	close(tasks)
 
 	opts := engine.ExecOptions{TotalTasks: 3}
-	err := engine.RunJobPool(2, tasks, opts)
+	_, err := engine.RunJobPool(2, tasks, opts)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -34,7 +34,7 @@ func TestRunJobPool_Concurrency(t *testing.T) {
 
 	opts := engine.ExecOptions{TotalTasks: 5}
 	start := time.Now()
-	err := engine.RunJobPool(5, tasks, opts)
+	_, err := engine.RunJobPool(5, tasks, opts)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -51,7 +51,7 @@ func TestRunJobPool_ErrorPropagated(t *testing.T) {
 	close(tasks)
 
 	opts := engine.ExecOptions{TotalTasks: 1}
-	err := engine.RunJobPool(1, tasks, opts)
+	_, err := engine.RunJobPool(1, tasks, opts)
 	if err == nil {
 		t.Fatalf("expected error from failed command, got nil")
 	}
@@ -72,7 +72,7 @@ func TestRunJobPool_PartialFailure(t *testing.T) {
 	close(tasks)
 
 	opts := engine.ExecOptions{TotalTasks: 2}
-	err := engine.RunJobPool(2, tasks, opts)
+	_, err := engine.RunJobPool(2, tasks, opts)
 	if err == nil {
 		t.Fatalf("expected error from failed command, got nil")
 	}
@@ -92,7 +92,7 @@ func TestRunShellCommand_Env(t *testing.T) {
 	close(tasks)
 
 	opts := engine.ExecOptions{TotalTasks: 1}
-	err := engine.RunJobPool(1, tasks, opts)
+	_, err := engine.RunJobPool(1, tasks, opts)
 	if err != nil {
 		t.Fatalf("expected COXEC_INDEX to be 42, got error: %v", err)
 	}
@@ -374,7 +374,7 @@ func TestRunJobPool_GlobalTimeout(t *testing.T) {
 		Context:    ctx,
 	}
 
-	err := engine.RunJobPool(2, tasks, opts)
+	_, err := engine.RunJobPool(2, tasks, opts)
 	if err == nil {
 		t.Fatal("expected error due to global timeout, got nil")
 	}

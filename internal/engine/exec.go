@@ -6,8 +6,10 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -50,26 +52,22 @@ type Task struct {
 
 // ExecOptions groups behavior flags for the engine
 type ExecOptions struct {
-	Verbose    bool
-	Silent     bool
-	Report     bool
-	TotalTasks int
-	Context    context.Context
-	Stdout     interface {
-		Write([]byte) (int, error)
-	}
-	UserVars   map[string]string
-	Stderr interface {
-		Write([]byte) (int, error)
-	}
+	Silent        bool
+	Verbose       bool
 	Registry      *BuiltinRegistry
+	TotalTasks    int
+	Stdout        io.Writer
+	Stderr        io.Writer
+	Context       context.Context
+	UserVars      map[string]string
 	TemplateState *TemplateState
+	ActiveCount   *atomic.Int32
+	Report        bool
 	Timeout       time.Duration
 	Delay         time.Duration
 	Jitter        time.Duration
 	RampUp        time.Duration
-	ActiveCount   *atomic.Int32
-	RateLimit     float64 // executions per second, 0 means no limit
+	RateLimit     float64
 }
 
 // RunPipeline executes a series of pipeline steps
@@ -252,21 +250,25 @@ func runShellStep(ctx context.Context, command string, taskIndex int) (*Result, 
 }
 
 // RunJobPool executes commands from the tasks channel across a pool of worker goroutines
-func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
+func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) (*ExecutionReport, error) {
+	poolStart := time.Now()
 	var wg sync.WaitGroup
-	var errMu sync.Mutex
-	var firstErr error
-
 	var successCount atomic.Int32
 	var failCount atomic.Int32
+	var timeoutCount int
+	var errMu sync.Mutex
+	var firstErr error
+	var latencies []int64
+	var latMu sync.Mutex
+
+	var details []ExecutionDetail
+	var detailsMu sync.Mutex
 
 	type tempErrCount struct {
 		err   *TemplateError
 		count int
 	}
 	templateErrors := make(map[string]*tempErrCount)
-
-	var timeoutCount int
 
 	type httpErrCount struct {
 		err   *HTTPError
@@ -280,7 +282,6 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 	}
 	tcpErrors := make(map[string]*tcpErrCount)
 
-	poolStart := time.Now()
 	interval := time.Duration(0)
 	if opts.RampUp > 0 && concurrency > 1 {
 		interval = opts.RampUp / time.Duration(concurrency-1)
@@ -290,7 +291,7 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 		if i > 0 && interval > 0 {
 			select {
 			case <-opts.Context.Done():
-				return opts.Context.Err()
+				return nil, opts.Context.Err()
 			case <-time.After(interval):
 			}
 		}
@@ -309,7 +310,52 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 				}
 
 				task.WorkerID = id
-				if err := RunPipeline(task, opts); err != nil {
+				taskStart := time.Now()
+
+				var taskOpts = opts
+				var stdout, stderr strings.Builder
+				if opts.Verbose {
+					taskOpts.Stdout = &stdout
+					taskOpts.Stderr = &stderr
+					taskOpts.Silent = false // Enable writing so we can capture it
+				}
+
+				err := RunPipeline(task, taskOpts)
+				duration := time.Since(taskStart)
+
+				if opts.Verbose {
+					detail := ExecutionDetail{
+						Index:    task.Index,
+						Status:   "success",
+						Duration: duration.Round(time.Microsecond).String(),
+						Output:   stderr.String(),
+					}
+					if err != nil {
+						detail.Status = "fail"
+						detail.Error = err.Error()
+						if stderr.Len() > 0 {
+							if detail.Output != "" {
+								detail.Output += "\n"
+							}
+							detail.Output += "Stderr: " + stderr.String()
+						}
+					}
+					detailsMu.Lock()
+					details = append(details, detail)
+					detailsMu.Unlock()
+
+					// Flush the captured verbose output to the original Stderr so it shows up in CLI/text responses
+					outputMu.Lock()
+					if opts.Stderr != nil {
+						opts.Stderr.Write([]byte(detail.Output))
+						if !strings.HasSuffix(detail.Output, "\n") {
+							opts.Stderr.Write([]byte("\n"))
+						}
+					}
+					outputMu.Unlock()
+				}
+
+				if err != nil {
 					failCount.Add(1)
 					errMu.Lock()
 					if firstErr == nil {
@@ -344,6 +390,9 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 					errMu.Unlock()
 				} else {
 					successCount.Add(1)
+					latMu.Lock()
+					latencies = append(latencies, time.Since(taskStart).Nanoseconds())
+					latMu.Unlock()
 				}
 			}
 		}(workerID)
@@ -406,27 +455,108 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) error {
 		}
 	}
 
+	sc := successCount.Load()
+	fc := failCount.Load()
+
+	report := &ExecutionReport{
+		TotalExecutions: int(totalExecs),
+		SuccessCount:    int(sc),
+		FailCount:       int(fc),
+		TimeoutCount:    timeoutCount,
+		TotalDuration:   poolDuration.Round(time.Millisecond).String(),
+		RatePerSecond:   rate,
+		Details:         details,
+	}
+
+	// Capture aggregate output if builders were provided
+	if opts.Stdout != nil {
+		if sb, ok := opts.Stdout.(*strings.Builder); ok {
+			s := sb.String()
+			if s != "" {
+				report.Stdout = strings.Split(strings.TrimRight(s, "\n"), "\n")
+			}
+		}
+	}
+	if opts.Stderr != nil {
+		if sb, ok := opts.Stderr.(*strings.Builder); ok {
+			s := sb.String()
+			if s != "" {
+				report.Stderr = strings.Split(strings.TrimRight(s, "\n"), "\n")
+			}
+		}
+	}
+
+	if len(latencies) > 0 {
+		var totalLat int64
+		for _, l := range latencies {
+			totalLat += l
+		}
+		avgLat := time.Duration(totalLat / int64(len(latencies)))
+		report.AverageLatency = avgLat.Round(time.Microsecond).String()
+
+		p50, p90, p95, p99 := calculatePercentiles(latencies)
+		report.P50Latency = p50.String()
+		report.P90Latency = p90.String()
+		report.P95Latency = p95.String()
+		report.P99Latency = p99.String()
+	}
+
+	if opts.Report {
+		if len(httpErrors) > 0 {
+			report.HTTPErrors = make(map[string]int)
+			for cat, hec := range httpErrors {
+				report.HTTPErrors[cat] = hec.count
+			}
+		}
+		if len(tcpErrors) > 0 {
+			report.TCPErrors = make(map[string]int)
+			for cat, tec := range tcpErrors {
+				report.TCPErrors[cat] = tec.count
+			}
+		}
+		if len(templateErrors) > 0 {
+			report.TemplateErrors = make(map[string]int)
+			for _, tec := range templateErrors {
+				report.TemplateErrors[tec.err.Error()] = tec.count
+			}
+		}
+
+		// Also print percentiles if report is true
+		if len(latencies) > 0 {
+			fmt.Fprintf(stderr, "Percentiles: p50=%s p90=%s p95=%s p99=%s\n",
+				report.P50Latency, report.P90Latency, report.P95Latency, report.P99Latency)
+		}
+	}
+
 	if opts.Context != nil && opts.Context.Err() != nil {
 		if errors.Is(opts.Context.Err(), context.DeadlineExceeded) {
-			return &ExitError{Code: 124, Err: fmt.Errorf("global timeout reached: %w", opts.Context.Err())}
+			return report, &ExitError{Code: 124, Err: fmt.Errorf("global timeout reached: %w", opts.Context.Err())}
 		}
-		return &ExitError{Code: 130, Err: opts.Context.Err()}
+		return report, &ExitError{Code: 130, Err: opts.Context.Err()}
 	}
-
-	total := successCount.Load() + failCount.Load()
-	if total == 0 {
-		return nil
-	}
-
-	fc := failCount.Load()
-	sc := successCount.Load()
 
 	if fc > 0 && sc == 0 {
-		return &ExitError{Code: 2, Err: firstErr}
+		return report, &ExitError{Code: 2, Err: firstErr}
 	} else if fc > 0 && sc > 0 {
-		return &ExitError{Code: 1, Err: firstErr}
+		return report, &ExitError{Code: 1, Err: firstErr}
 	}
 
-	return nil
+	return report, nil
+}
+
+func calculatePercentiles(latencies []int64) (p50, p90, p95, p99 time.Duration) {
+	if len(latencies) == 0 {
+		return 0, 0, 0, 0
+	}
+	sorted := make([]int64, len(latencies))
+	copy(sorted, latencies)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+
+	getPercentile := func(p float64) time.Duration {
+		idx := int(float64(len(sorted)-1) * p / 100.0)
+		return time.Duration(sorted[idx])
+	}
+
+	return getPercentile(50), getPercentile(90), getPercentile(95), getPercentile(99)
 }
 

@@ -20,6 +20,36 @@ type Result struct {
 	IsTransparent bool  // If true, Stdout has already been handled or should be ignored for display
 }
 
+// ExecutionDetail represents the detailed result of a single execution
+type ExecutionDetail struct {
+	Index    int    `json:"index"`
+	Status   string `json:"status"`
+	Duration string `json:"duration"`
+	Output   string `json:"output,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+// ExecutionReport represents a full summary of a completed Job Pool execution
+type ExecutionReport struct {
+	TotalExecutions int               `json:"total_executions"`
+	SuccessCount    int               `json:"success_count"`
+	FailCount       int               `json:"fail_count"`
+	TimeoutCount    int               `json:"timeout_count"`
+	TotalDuration   string            `json:"total_duration"`
+	AverageLatency  string            `json:"average_latency"`
+	P50Latency      string            `json:"p50_latency"`
+	P90Latency      string            `json:"p90_latency"`
+	P95Latency      string            `json:"p95_latency"`
+	P99Latency      string            `json:"p99_latency"`
+	RatePerSecond   float64           `json:"rate_per_second"`
+	HTTPErrors      map[string]int    `json:"http_errors,omitempty"`
+	TCPErrors       map[string]int    `json:"tcp_errors,omitempty"`
+	TemplateErrors  map[string]int    `json:"template_errors,omitempty"`
+	Details         []ExecutionDetail `json:"details,omitempty"`
+	Stdout          []string          `json:"stdout,omitempty"`
+	Stderr          []string          `json:"stderr,omitempty"`
+}
+
 // BuiltinRegistry manages registered built-in clients
 type BuiltinRegistry struct {
 	builtins map[string]BuiltinClient

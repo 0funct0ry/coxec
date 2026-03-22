@@ -159,7 +159,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 		}
 
 		if serverFlag {
-			s := server.NewServer(addr, port, Version)
+			s := server.NewServer(addr, port, Version, registry)
 			return s.Start(ctx)
 		}
 
@@ -213,7 +213,8 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 
 			startTaskGenerator(ctx, tasks, iterations, executeCmd, delay, jitter, rateLimit, verboseFlag)
 
-			return engine.RunJobPool(actualConcurrency, tasks, opts)
+			_, err = engine.RunJobPool(actualConcurrency, tasks, opts)
+			return err
 		}
 
 		if fileFlag != "" {
@@ -267,7 +268,8 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 
 			startTaskGenerator(ctx, tasks, iterations, string(scriptContent), delay, jitter, rateLimit, verboseFlag)
 
-			return engine.RunJobPool(actualConcurrency, tasks, opts)
+			_, err = engine.RunJobPool(actualConcurrency, tasks, opts)
+			return err
 		}
 
 		if templateFlag != "" {
@@ -352,7 +354,8 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 
 			startTaskGenerator(ctx, tasks, iterations, string(tplContent), delay, jitter, rateLimit, verboseFlag)
 
-			return engine.RunJobPool(actualConcurrency, tasks, opts)
+			_, err = engine.RunJobPool(actualConcurrency, tasks, opts)
+			return err
 		}
 
 		return nil

@@ -112,6 +112,70 @@ curl http://localhost:8080/health
 
 The endpoint returns `503 Service Unavailable` if the server is starting up or shutting down.
 
+#### Synchronous Execution
+Trigger a concurrent execution and wait for the full results in the HTTP response using the `/exec` endpoint:
+
+```bash
+curl -X POST http://localhost:8080/exec \
+  -H "Content-Type: application/json" \
+  -d '{
+    "exec": ".http GET https://api.example.com/users/{{.Iteration}}",
+    "concurrency": 10,
+    "iterations": 100,
+    "timeout": "5s"
+  }'
+```
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "report": {
+    "total_executions": 100,
+    "success_count": 98,
+    "fail_count": 2,
+    "timeout_count": 0,
+    "total_duration": "105ms",
+    "average_latency": "100.5ms",
+    "p50_latency": "100.1ms",
+    "p90_latency": "100.9ms",
+    "p95_latency": "100.9ms",
+    "p99_latency": "100.9ms",
+    "rate_per_second": 19.0,
+    "stdout": ["Line 1", "Line 2"],
+    "stderr": ["Summary line 1", "Summary line 2"]
+  }
+}
+```
+
+#### Supported Fields
+- `exec`: (Required) The command string to execute.
+- `concurrency`: (Optional) Maximum number of concurrent executions.
+- `iterations`: (Optional) Total number of executions.
+- `timeout`: (Optional) Timeout for each execution (e.g., "5s", "100ms").
+- `rate`: (Optional) Maximum execution rate (e.g., "10/s").
+- `vars`: (Optional) Map of user-defined variables for templates.
+- `delay`: (Optional) Constant delay between iterations.
+- `jitter`: (Optional) Random jitter added to delay.
+- `rampup`: (Optional) Duration to linearly increase concurrency.
+- `verbose`: (Optional) If true, returns detailed per-execution results in the `details` field.
+
+The endpoint returns `400 Bad Request` for invalid payloads and `500 Internal Server Error` if execution fails catastrophically.
+
+#### Developer Experience (DX) Features
+- **Flexible Requests**: Supports both JSON and form-encoded (`application/x-www-form-urlencoded`) payloads. You can use `curl -d "exec=echo hi"` without extra headers.
+- **Smart Responses**: Automatically returns human-readable plain text (matching CLI output) if you don't explicitly request JSON via the `Accept` header.
+- **Header-less JSON**: If you send a JSON payload via `curl -d`, the server will automatically detect and parse it as JSON even without the `Content-Type: application/json` header.
+- **Structured `exec` Objects**: To avoid escaping hell with complex JSON payloads (like in `.http`), you can pass a structured JSON object for the `exec` field. The server will automatically quote and format it for the engine:
+  ```json
+  "exec": {
+    "client": ".http",
+    "method": "POST",
+    "url": "http://localhost:9090/post",
+    "body": { "id": "123", "status": "active" }
+  }
+  ```
+
 ## Flags
 
 - `-e, --exec string`: Shell command to execute repeatedly.
