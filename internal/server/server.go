@@ -3,7 +3,10 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,15 +32,16 @@ const (
 
 // Server represents the coxec HTTP server.
 type Server struct {
-	Addr       string
-	Port       int
-	Version    string
-	StartTime  time.Time
-	Status     ServerStatus
-	ActiveJobs atomic.Int32
-	AuthToken  string
-	AuthBasic  string
-	Registry   *engine.BuiltinRegistry
+	Addr           string
+	Port           int
+	Version        string
+	StartTime      time.Time
+	Status         ServerStatus
+	ActiveJobs     atomic.Int32
+	AuthToken      string
+	AuthBasic      string
+	AuthHmacSecret string
+	Registry       *engine.BuiltinRegistry
 }
 
 // ExecRequest defines the payload for POST /exec
@@ -62,16 +66,17 @@ type ExecResponse struct {
 }
 
 // NewServer creates a new Server instance.
-func NewServer(addr string, port int, version string, authToken string, authBasic string, registry *engine.BuiltinRegistry) *Server {
+func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, registry *engine.BuiltinRegistry) *Server {
 	return &Server{
-		Addr:      addr,
-		Port:      port,
-		Version:   version,
-		AuthToken: authToken,
-		AuthBasic: authBasic,
-		StartTime: time.Now(),
-		Status:    StatusStarting,
-		Registry:  registry,
+		Addr:           addr,
+		Port:           port,
+		Version:        version,
+		AuthToken:      authToken,
+		AuthBasic:      authBasic,
+		AuthHmacSecret: authHmacSecret,
+		StartTime:      time.Now(),
+		Status:         StatusStarting,
+		Registry:       registry,
 	}
 }
 
@@ -175,8 +180,35 @@ func (s *Server) execHandler(w http.ResponseWriter, r *http.Request) {
 	var req ExecRequest
 	contentType := r.Header.Get("Content-Type")
 
-	// Read body for multiple parsing attempts
+	// Read body for multiple parsing attempts and HMAC validation
 	rawBytes, _ := io.ReadAll(r.Body)
+
+	if s.AuthHmacSecret != "" {
+		hmacHeader := r.Header.Get("X-Signature")
+		if !strings.HasPrefix(hmacHeader, "sha256=") {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "unauthorized"})
+			return
+		}
+		providedSig := strings.TrimPrefix(hmacHeader, "sha256=")
+		expectedBytes, err := hex.DecodeString(providedSig)
+		if err != nil {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "unauthorized"})
+			return
+		}
+
+		mac := hmac.New(sha256.New, []byte(s.AuthHmacSecret))
+		mac.Write(rawBytes)
+		computedSig := mac.Sum(nil)
+
+		if !hmac.Equal(computedSig, expectedBytes) {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "unauthorized"})
+			return
+		}
+	}
+
 	r.Body = io.NopCloser(bytes.NewBuffer(rawBytes))
 
 	// Pre-process: replace bare (unquoted) template expressions with string placeholders

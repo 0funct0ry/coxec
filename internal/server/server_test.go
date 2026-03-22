@@ -2,6 +2,9 @@ package server
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +17,7 @@ import (
 )
 
 func TestHealthCheck(t *testing.T) {
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", engine.NewBuiltinRegistry())
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "", engine.NewBuiltinRegistry())
 	
 	t.Run("StatusStarting", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/health", nil)
@@ -93,7 +96,7 @@ func TestHealthCheck(t *testing.T) {
 func TestExecHandler(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
 	registry.Register(engine.NewSleepClient())
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", registry)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "", registry)
 	s.Status = StatusReady
 
 	t.Run("ValidRequest", func(t *testing.T) {
@@ -304,7 +307,7 @@ func TestExecHandler(t *testing.T) {
 
 func TestExecHandlerWithAuth(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "super-secret", "", registry)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "super-secret", "", "", registry)
 	s.Status = StatusReady
 
 	validPayload := ExecRequest{
@@ -366,7 +369,7 @@ func TestExecHandlerWithAuth(t *testing.T) {
 
 func TestExecHandlerWithBasicAuth(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "admin:secret", registry)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "admin:secret", "", registry)
 	s.Status = StatusReady
 
 	validPayload := ExecRequest{
@@ -425,6 +428,82 @@ func TestExecHandlerWithBasicAuth(t *testing.T) {
 	t.Run("CorrectCredentials", func(t *testing.T) {
 		// admin:secret base64 = YWRtaW46c2VjcmV0
 		req := makeReq("Basic YWRtaW46c2VjcmV0")
+		rr := httptest.NewRecorder()
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("expected status 200, got %d", rr.Code)
+		}
+	})
+}
+
+func TestExecHandlerWithHmac(t *testing.T) {
+	registry := engine.NewBuiltinRegistry()
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "hmac-secret", registry)
+	s.Status = StatusReady
+
+	validPayload := ExecRequest{
+		Exec:        "echo hello",
+		Concurrency: 1,
+		Iterations:  1,
+	}
+	bodyBytes, _ := json.Marshal(validPayload)
+
+	makeReq := func(sig string) *http.Request {
+		req := httptest.NewRequest("POST", "/exec", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("Content-Type", "application/json")
+		if sig != "" {
+			req.Header.Set("X-Signature", sig)
+		}
+		return req
+	}
+
+	t.Run("MissingSignature", func(t *testing.T) {
+		req := makeReq("")
+		rr := httptest.NewRecorder()
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("expected status 401, got %d", rr.Code)
+		}
+	})
+
+	t.Run("MalformedSignatureMissingPrefix", func(t *testing.T) {
+		req := makeReq("1234abcd")
+		rr := httptest.NewRecorder()
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("expected status 401, got %d", rr.Code)
+		}
+	})
+
+	t.Run("MalformedSignatureNotHex", func(t *testing.T) {
+		req := makeReq("sha256=nothex")
+		rr := httptest.NewRecorder()
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("expected status 401, got %d", rr.Code)
+		}
+	})
+
+	t.Run("IncorrectSignature", func(t *testing.T) {
+		req := makeReq("sha256=" + "1234abcd")
+		rr := httptest.NewRecorder()
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("expected status 401, got %d", rr.Code)
+		}
+	})
+
+	t.Run("CorrectSignature", func(t *testing.T) {
+		mac := hmac.New(sha256.New, []byte("hmac-secret"))
+		mac.Write(bodyBytes)
+		sig := hex.EncodeToString(mac.Sum(nil))
+
+		req := makeReq("sha256=" + sig)
 		rr := httptest.NewRecorder()
 		s.execHandler(rr, req)
 

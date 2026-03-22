@@ -193,6 +193,7 @@ The endpoint returns `400 Bad Request` for invalid payloads and `500 Internal Se
 - `-p, --port int`: Port to listen on (default: `8080`).
 - `--auth-token string`: Bearer token required for server API requests (except `/health`).
 - `--auth-basic string`: Basic auth credentials in `user:pass` format required for server API requests (except `/health`).
+- `--auth-hmac-secret string`: HMAC secret for verifying `X-Signature: sha256=<hex>` headers on server API requests (except `/health`).
 - `-c, --concurrency int`: Number of concurrent workers. (default: `1`)
 - `-n, --iterations int`: Total number of executions (defaults to `--concurrency`).
 - `--rate string`: Maximum execution rate (e.g., `50/s`, `10/m`, `1/h`).

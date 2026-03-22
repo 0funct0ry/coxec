@@ -160,18 +160,30 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 
 		authToken, _ := cmd.Flags().GetString("auth-token")
 		authBasic, _ := cmd.Flags().GetString("auth-basic")
+		authHmacSecret, _ := cmd.Flags().GetString("auth-hmac-secret")
 
-		if authToken != "" && authBasic != "" {
+		authFlagsSet := 0
+		if authToken != "" {
+			authFlagsSet++
+		}
+		if authBasic != "" {
+			authFlagsSet++
+		}
+		if authHmacSecret != "" {
+			authFlagsSet++
+		}
+
+		if authFlagsSet > 1 {
 			return &ValidationError{
 				ExitCode:   validationExitCode,
 				ID:         "INVALID_ARGS",
-				Message:    "flags --auth-token and --auth-basic are mutually exclusive",
+				Message:    "flags --auth-token, --auth-basic, and --auth-hmac-secret are mutually exclusive",
 				Suggestion: "use only one authentication method",
 			}
 		}
 
 		if serverFlag {
-			s := server.NewServer(addr, port, Version, authToken, authBasic, registry)
+			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, registry)
 			return s.Start(ctx)
 		}
 
@@ -397,6 +409,7 @@ func init() {
 	rootCmd.Flags().IntP("port", "p", 8080, "Port to listen on")
 	rootCmd.Flags().String("auth-token", "", "Bearer token required for server API requests (except /health)")
 	rootCmd.Flags().String("auth-basic", "", "Basic auth credentials in user:pass format required for server API requests (except /health)")
+	rootCmd.Flags().String("auth-hmac-secret", "", "HMAC secret required for server API requests (except /health)")
 
 	// Register built-in client subcommands for help and discovery
 	registry := getBuiltinRegistry()
