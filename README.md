@@ -93,6 +93,12 @@ Start `coxec` as a long-running HTTP service:
 coxec --server --port 9000
 ```
 
+You can secure the `/exec` endpoint with a Bearer token:
+
+```bash
+coxec --server --port 9000 --auth-token "super-secret-token"
+```
+
 #### Health Check
 Verify the server status using the `/health` endpoint:
 
@@ -118,6 +124,7 @@ Trigger a concurrent execution and wait for the full results in the HTTP respons
 ```bash
 curl -X POST http://localhost:8080/exec \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer super-secret-token" \
   -d '{
     "exec": ".http GET https://api.example.com/users/{{.Iteration}}",
     "concurrency": 10,
@@ -184,6 +191,7 @@ The endpoint returns `400 Bad Request` for invalid payloads and `500 Internal Se
 - `-s, --server`: Start `coxec` in server mode.
 - `-a, --addr string`: Bind address for the server (default: `127.0.0.1`).
 - `-p, --port int`: Port to listen on (default: `8080`).
+- `--auth-token string`: Bearer token required for server API requests (except `/health`).
 - `-c, --concurrency int`: Number of concurrent workers. (default: `1`)
 - `-n, --iterations int`: Total number of executions (defaults to `--concurrency`).
 - `--rate string`: Maximum execution rate (e.g., `50/s`, `10/m`, `1/h`).

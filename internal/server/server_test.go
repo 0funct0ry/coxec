@@ -14,7 +14,7 @@ import (
 )
 
 func TestHealthCheck(t *testing.T) {
-	s := NewServer("127.0.0.1", 8080, "1.0.0", engine.NewBuiltinRegistry())
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", engine.NewBuiltinRegistry())
 	
 	t.Run("StatusStarting", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/health", nil)
@@ -93,7 +93,7 @@ func TestHealthCheck(t *testing.T) {
 func TestExecHandler(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
 	registry.Register(engine.NewSleepClient())
-	s := NewServer("127.0.0.1", 8080, "1.0.0", registry)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", registry)
 	s.Status = StatusReady
 
 	t.Run("ValidRequest", func(t *testing.T) {
@@ -298,6 +298,68 @@ func TestExecHandler(t *testing.T) {
 
 		if resp.Status != "ok" {
 			t.Errorf("expected status 'ok', got '%s'", resp.Status)
+		}
+	})
+}
+
+func TestExecHandlerWithAuth(t *testing.T) {
+	registry := engine.NewBuiltinRegistry()
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "super-secret", registry)
+	s.Status = StatusReady
+
+	validPayload := ExecRequest{
+		Exec:        "echo hello",
+		Concurrency: 1,
+		Iterations:  1,
+	}
+	bodyBytes, _ := json.Marshal(validPayload)
+
+	makeReq := func(authHeader string) *http.Request {
+		req := httptest.NewRequest("POST", "/exec", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("Content-Type", "application/json")
+		if authHeader != "" {
+			req.Header.Set("Authorization", authHeader)
+		}
+		return req
+	}
+
+	t.Run("MissingToken", func(t *testing.T) {
+		req := makeReq("")
+		rr := httptest.NewRecorder()
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("expected status 401, got %d", rr.Code)
+		}
+	})
+
+	t.Run("MalformedToken", func(t *testing.T) {
+		req := makeReq("super-secret") // missing Bearer prefix
+		rr := httptest.NewRecorder()
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("expected status 401, got %d", rr.Code)
+		}
+	})
+
+	t.Run("IncorrectToken", func(t *testing.T) {
+		req := makeReq("Bearer wrong-token")
+		rr := httptest.NewRecorder()
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("expected status 401, got %d", rr.Code)
+		}
+	})
+
+	t.Run("CorrectToken", func(t *testing.T) {
+		req := makeReq("Bearer super-secret")
+		rr := httptest.NewRecorder()
+		s.execHandler(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("expected status 200, got %d", rr.Code)
 		}
 	})
 }

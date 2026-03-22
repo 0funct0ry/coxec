@@ -158,8 +158,10 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			defer globalCancel()
 		}
 
+		authToken, _ := cmd.Flags().GetString("auth-token")
+
 		if serverFlag {
-			s := server.NewServer(addr, port, Version, registry)
+			s := server.NewServer(addr, port, Version, authToken, registry)
 			return s.Start(ctx)
 		}
 
@@ -383,6 +385,7 @@ func init() {
 	rootCmd.Flags().BoolP("server", "s", false, "Start coxec in server mode")
 	rootCmd.Flags().StringP("addr", "a", "127.0.0.1", "Bind address for the server")
 	rootCmd.Flags().IntP("port", "p", 8080, "Port to listen on")
+	rootCmd.Flags().String("auth-token", "", "Bearer token required for server API requests (except /health)")
 
 	// Register built-in client subcommands for help and discovery
 	registry := getBuiltinRegistry()

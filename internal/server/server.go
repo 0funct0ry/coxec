@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -34,6 +35,7 @@ type Server struct {
 	StartTime  time.Time
 	Status     ServerStatus
 	ActiveJobs atomic.Int32
+	AuthToken  string
 	Registry   *engine.BuiltinRegistry
 }
 
@@ -59,11 +61,12 @@ type ExecResponse struct {
 }
 
 // NewServer creates a new Server instance.
-func NewServer(addr string, port int, version string, registry *engine.BuiltinRegistry) *Server {
+func NewServer(addr string, port int, version string, authToken string, registry *engine.BuiltinRegistry) *Server {
 	return &Server{
 		Addr:      addr,
 		Port:      port,
 		Version:   version,
+		AuthToken: authToken,
 		StartTime: time.Now(),
 		Status:    StatusStarting,
 		Registry:  registry,
@@ -132,6 +135,22 @@ func (s *Server) execHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "server is not ready"})
 		return
+	}
+
+	if s.AuthToken != "" {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "unauthorized"})
+			return
+		}
+		
+		token := strings.TrimPrefix(authHeader, "Bearer ")
+		if subtle.ConstantTimeCompare([]byte(token), []byte(s.AuthToken)) != 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "unauthorized"})
+			return
+		}
 	}
 
 	var req ExecRequest
