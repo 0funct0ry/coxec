@@ -48,6 +48,8 @@ type Server struct {
 	Registry       *engine.BuiltinRegistry
 	DefaultConcurrency int
 	DefaultIterations  int
+	MaxConcurrentJobs  int
+	EnableSync         bool
 }
 
 // ExecRequest defines the payload for POST /exec
@@ -72,7 +74,7 @@ type ExecResponse struct {
 }
 
 // NewServer creates a new Server instance.
-func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry, defaultConcurrency, defaultIterations int) *Server {
+func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry, defaultConcurrency, defaultIterations int, maxConcurrentJobs int, enableSync bool) *Server {
 	return &Server{
 		Addr:               addr,
 		Port:               port,
@@ -87,6 +89,8 @@ func NewServer(addr string, port int, version string, authToken string, authBasi
 		Registry:           registry,
 		DefaultConcurrency: defaultConcurrency,
 		DefaultIterations:  defaultIterations,
+		MaxConcurrentJobs:  maxConcurrentJobs,
+		EnableSync:         enableSync,
 	}
 }
 
@@ -175,6 +179,12 @@ func (s *Server) ExecHandler(w http.ResponseWriter, r *http.Request) {
 	if currentStatus != StatusReady {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "server is not ready"})
+		return
+	}
+
+	if s.MaxConcurrentJobs > 0 && s.ActiveJobs.Load() >= int32(s.MaxConcurrentJobs) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "server at maximum capacity"})
 		return
 	}
 

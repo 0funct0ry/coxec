@@ -18,7 +18,7 @@ import (
 )
 
 func TestHealthCheck(t *testing.T) {
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "", "", "", engine.NewBuiltinRegistry(), 1, 1)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "", "", "", engine.NewBuiltinRegistry(), 1, 1, 0, true)
 	
 	t.Run("StatusStarting", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/health", nil)
@@ -97,7 +97,7 @@ func TestHealthCheck(t *testing.T) {
 func TestExecHandler(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
 	registry.Register(engine.NewSleepClient())
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "", "", "", registry, 1, 1)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true)
 	s.Status = StatusReady
 
 	t.Run("ValidRequest", func(t *testing.T) {
@@ -374,7 +374,7 @@ func TestExecHandler(t *testing.T) {
 
 func TestExecHandlerWithAuth(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "super-secret", "", "", "", "", registry, 1, 1)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "super-secret", "", "", "", "", registry, 1, 1, 0, true)
 	s.Status = StatusReady
 
 	validPayload := ExecRequest{
@@ -436,7 +436,7 @@ func TestExecHandlerWithAuth(t *testing.T) {
 
 func TestExecHandlerWithBasicAuth(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "admin:secret", "", "", "", registry, 1, 1)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "admin:secret", "", "", "", registry, 1, 1, 0, true)
 	s.Status = StatusReady
 
 	validPayload := ExecRequest{
@@ -506,7 +506,7 @@ func TestExecHandlerWithBasicAuth(t *testing.T) {
 
 func TestExecHandlerWithHmac(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "hmac-secret", "", "", registry, 1, 1)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "hmac-secret", "", "", registry, 1, 1, 0, true)
 	s.Status = StatusReady
 
 	validPayload := ExecRequest{
@@ -584,7 +584,7 @@ func TestStartTLS_MissingFiles(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "nonexistent.cert", "nonexistent.key", engine.NewBuiltinRegistry(), 1, 1)
+	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "nonexistent.cert", "nonexistent.key", engine.NewBuiltinRegistry(), 1, 1, 0, true)
 	err := s.Start(ctx)
 
 	if err == nil {

@@ -110,6 +110,35 @@ coxec --server --port 8443 --tls-cert cert.pem --tls-key key.pem
 
 The server will listen on HTTPS when both flags are provided. If one is missing, the server will fail to start.
 
+#### Configuration File
+`coxec` supports loading server settings from a YAML file (default: `coxec.yaml` in the current directory). You can specify a custom path using `--config <path>`.
+
+**Example `coxec.yaml`:**
+```yaml
+server:
+  addr: 0.0.0.0
+  port: 9000
+  auth-token: "${MY_SECRET_TOKEN}"
+  max-concurrent-jobs: 50
+  default-concurrency: 5
+  default-iterations: 10
+  enable-sync: true
+  tls:
+    cert: cert.pem
+    key: key.pem
+```
+
+**Precedence Order:**
+1. CLI Flags (e.g., `-p 8081`)
+2. Environment Variables (e.g., `COXEC_SERVER_PORT=8082`)
+3. Configuration File (`coxec.yaml`)
+4. Internal Defaults
+
+Environment variables follow the pattern `COXEC_SERVER_<KEY>` (e.g., `COXEC_SERVER_AUTH_TOKEN`, `COXEC_SERVER_MAX_CONCURRENT_JOBS`).
+
+#### Global Capacity Limit
+The `max-concurrent-jobs` setting (or `--max-concurrent-jobs` flag) enforces a global limit on the number of active requests (jobs) the server handles at once. When the limit is reached, new requests receive a `503 Service Unavailable` response.
+
 #### Health Check
 Verify the server status using the `/health` endpoint:
 
@@ -207,6 +236,9 @@ The endpoint returns `400 Bad Request` for invalid payloads (e.g. non-positive v
 - `--auth-hmac-secret string`: HMAC secret for verifying `X-Signature: sha256=<hex>` headers on server API requests (except `/health`).
 - `--tls-cert string`: Path to TLS certificate file (PEM format).
 - `--tls-key string`: Path to TLS private key file (PEM format).
+- `--config string`: Path to configuration file (e.g., `coxec.yaml`).
+- `--max-concurrent-jobs int`: Maximum number of concurrent jobs (requests) allowed globally.
+- `--enable-sync bool`: Enable synchronous execution mode (default: `true`).
 - `-c, --concurrency int`: Number of concurrent workers. (default: `1`)
 - `-n, --iterations int`: Total number of executions (defaults to `--concurrency`).
 - `--rate string`: Maximum execution rate (e.g., `50/s`, `10/m`, `1/h`).

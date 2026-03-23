@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/0funct0ry/coxec/internal/config"
 	"github.com/0funct0ry/coxec/internal/engine"
 	"github.com/0funct0ry/coxec/internal/server"
 	"github.com/spf13/cobra"
@@ -115,14 +116,53 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 		silentFlag, _ := cmd.Flags().GetBool("silent")
 		reportFlag, _ := cmd.Flags().GetBool("report")
 		serverFlag, _ := cmd.Flags().GetBool("server")
-		addr, _ := cmd.Flags().GetString("addr")
-		port, _ := cmd.Flags().GetInt("port")
+		configPath, _ := cmd.Flags().GetString("config")
 
+		v := config.InitViper()
+		// Bind server flags to viper
+		v.BindPFlag("server.addr", cmd.Flags().Lookup("addr"))
+		v.BindPFlag("server.port", cmd.Flags().Lookup("port"))
+		v.BindPFlag("server.auth-token", cmd.Flags().Lookup("auth-token"))
+		v.BindPFlag("server.auth-basic", cmd.Flags().Lookup("auth-basic"))
+		v.BindPFlag("server.auth-hmac-secret", cmd.Flags().Lookup("auth-hmac-secret"))
+		v.BindPFlag("server.tls.cert", cmd.Flags().Lookup("tls-cert"))
+		v.BindPFlag("server.tls.key", cmd.Flags().Lookup("tls-key"))
+		v.BindPFlag("server.default-concurrency", cmd.Flags().Lookup("concurrency"))
+		v.BindPFlag("server.default-iterations", cmd.Flags().Lookup("iterations"))
+		v.BindPFlag("server.max-concurrent-jobs", cmd.Flags().Lookup("max-concurrent-jobs"))
+		v.BindPFlag("server.enable-sync", cmd.Flags().Lookup("enable-sync"))
+
+		loadedConfig, err := config.LoadConfig(v, configPath)
+		if err != nil {
+			return err
+		}
+
+		addr := v.GetString("server.addr")
+		port := v.GetInt("server.port")
+		authToken := v.GetString("server.auth-token")
+		authBasic := v.GetString("server.auth-basic")
+		authHmacSecret := v.GetString("server.auth-hmac-secret")
+		tlsCert := v.GetString("server.tls.cert")
+		tlsKey := v.GetString("server.tls.key")
+		concurrency := v.GetInt("server.default-concurrency")
+		iterations := v.GetInt("server.default-iterations")
+		maxConcurrentJobs := v.GetInt("server.max-concurrent-jobs")
+		enableSync := v.GetBool("server.enable-sync")
+
+		// These flags are still needed for CLI mode or if they are not bound to viper yet
 		executeCmd, _ := cmd.Flags().GetString("execute")
 		fileFlag, _ := cmd.Flags().GetString("file")
 		templateFlag, _ := cmd.Flags().GetString("template")
-		concurrency, _ := cmd.Flags().GetInt("concurrency")
-		iterations, _ := cmd.Flags().GetInt("iterations")
+		// iterations/concurrency already handled by viper if in server mode, 
+		// but let's keep the CLI logic as is for non-server mode.
+		if !serverFlag {
+			concurrency, _ = cmd.Flags().GetInt("concurrency")
+			iterations, _ = cmd.Flags().GetInt("iterations")
+			if !cmd.Flags().Changed("iterations") {
+				iterations = concurrency
+			}
+		}
+
 		timeout, _ := cmd.Flags().GetDuration("timeout")
 		globalTimeout, _ := cmd.Flags().GetDuration("global-timeout")
 		delay, _ := cmd.Flags().GetDuration("delay")
@@ -138,17 +178,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 			return err
 		}
 
-		authToken, _ := cmd.Flags().GetString("auth-token")
-		authBasic, _ := cmd.Flags().GetString("auth-basic")
-		authHmacSecret, _ := cmd.Flags().GetString("auth-hmac-secret")
-		tlsCert, _ := cmd.Flags().GetString("tls-cert")
-		tlsKey, _ := cmd.Flags().GetString("tls-key")
-
 		rampup, _ := cmd.Flags().GetDuration("rampup")
-
-		if !cmd.Flags().Changed("iterations") {
-			iterations = concurrency
-		}
 
 		if err := validateExecutionSource(executeCmd, fileFlag, templateFlag, serverFlag); err != nil {
 			return err
@@ -203,7 +233,10 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 			if authFlagsSet == 0 {
 				fmt.Fprintln(os.Stderr, "WARNING: Starting server without authentication. This is insecure and should only be used for local testing.")
 			}
-			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations)
+			if loadedConfig != "" {
+				fmt.Fprintf(os.Stderr, "Config loaded from: %s\n", loadedConfig)
+			}
+			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations, maxConcurrentJobs, enableSync)
 			return s.Start(ctx)
 		}
 
@@ -420,6 +453,9 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 	cmd.Flags().String("auth-hmac-secret", "", "HMAC secret required for server API requests (except /health)")
 	cmd.Flags().String("tls-cert", "", "Path to TLS certificate file (PEM format)")
 	cmd.Flags().String("tls-key", "", "Path to TLS private key file (PEM format)")
+	cmd.Flags().String("config", "", "Path to configuration file")
+	cmd.Flags().Int("max-concurrent-jobs", 0, "Maximum number of concurrent jobs (requests) allowed globally")
+	cmd.Flags().Bool("enable-sync", true, "Enable synchronous execution mode")
 
 	// Register built-in client subcommands for help and discovery
 	registry := getBuiltinRegistry()
