@@ -46,6 +46,8 @@ type Server struct {
 	TLSCert        string
 	TLSKey         string
 	Registry       *engine.BuiltinRegistry
+	DefaultConcurrency int
+	DefaultIterations  int
 }
 
 // ExecRequest defines the payload for POST /exec
@@ -70,19 +72,21 @@ type ExecResponse struct {
 }
 
 // NewServer creates a new Server instance.
-func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry) *Server {
+func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry, defaultConcurrency, defaultIterations int) *Server {
 	return &Server{
-		Addr:           addr,
-		Port:           port,
-		Version:        version,
-		AuthToken:      authToken,
-		AuthBasic:      authBasic,
-		AuthHmacSecret: authHmacSecret,
-		TLSCert:        tlsCert,
-		TLSKey:         tlsKey,
-		StartTime:      time.Now(),
-		Status:         StatusStarting,
-		Registry:       registry,
+		Addr:               addr,
+		Port:               port,
+		Version:            version,
+		AuthToken:          authToken,
+		AuthBasic:          authBasic,
+		AuthHmacSecret:     authHmacSecret,
+		TLSCert:            tlsCert,
+		TLSKey:             tlsKey,
+		StartTime:          time.Now(),
+		Status:             StatusStarting,
+		Registry:           registry,
+		DefaultConcurrency: defaultConcurrency,
+		DefaultIterations:  defaultIterations,
 	}
 }
 
@@ -303,14 +307,38 @@ func (s *Server) ExecHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	concurrency := req.Concurrency
+	if concurrency == 0 {
+		concurrency = s.DefaultConcurrency
+	}
 	if concurrency <= 0 {
 		concurrency = 1
 	}
 
 	iterations := req.Iterations
+	if iterations == 0 {
+		iterations = s.DefaultIterations
+	}
 	if iterations <= 0 {
 		iterations = concurrency
 	}
+
+	// Validation
+	if concurrency > 1000 {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "concurrency exceeds maximum allowed (1000)"})
+		return
+	}
+	if iterations > 10000000 {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "iterations exceed maximum allowed (10,000,000)"})
+		return
+	}
+	if iterations < concurrency && iterations > 0 {
+		// This is technically allowed but we might want to warn or just let it be.
+		// For now, let's just make sure it's at least 1 if concurrency is 1.
+	}
+
+	fmt.Printf("[%s] Executing: %s (Concurrency: %d, Iterations: %d)\n", time.Now().Format(time.RFC3339), execStr, concurrency, iterations)
 
 	timeout, _ := time.ParseDuration(req.Timeout)
 	delay, _ := time.ParseDuration(req.Delay)

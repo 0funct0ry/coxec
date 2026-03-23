@@ -203,7 +203,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 			if authFlagsSet == 0 {
 				fmt.Fprintln(os.Stderr, "WARNING: Starting server without authentication. This is insecure and should only be used for local testing.")
 			}
-			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry)
+			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations)
 			return s.Start(ctx)
 		}
 

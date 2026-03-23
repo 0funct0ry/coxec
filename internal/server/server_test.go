@@ -18,7 +18,7 @@ import (
 )
 
 func TestHealthCheck(t *testing.T) {
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "", "", "", engine.NewBuiltinRegistry())
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "", "", "", engine.NewBuiltinRegistry(), 1, 1)
 	
 	t.Run("StatusStarting", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/health", nil)
@@ -97,7 +97,7 @@ func TestHealthCheck(t *testing.T) {
 func TestExecHandler(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
 	registry.Register(engine.NewSleepClient())
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "", "", "", registry)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "", "", "", registry, 1, 1)
 	s.Status = StatusReady
 
 	t.Run("ValidRequest", func(t *testing.T) {
@@ -304,11 +304,77 @@ func TestExecHandler(t *testing.T) {
 			t.Errorf("expected status 'ok', got '%s'", resp.Status)
 		}
 	})
+
+	t.Run("ConcurrencyAndIterationsOverrides", func(t *testing.T) {
+		// Server defaults are 1, 1
+		payload := ExecRequest{
+			Exec:        "echo hello",
+			Concurrency: 2,
+			Iterations:  4,
+		}
+		body, _ := json.Marshal(payload)
+		req := httptest.NewRequest("POST", "/exec", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		rr := httptest.NewRecorder()
+
+		s.ExecHandler(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("expected status 200, got %d", rr.Code)
+		}
+
+		var resp ExecResponse
+		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to unmarshal response: %v", err)
+		}
+
+		if resp.Report.TotalExecutions != 4 {
+			t.Errorf("expected 4 executions, got %d", resp.Report.TotalExecutions)
+		}
+	})
+
+	t.Run("ValidationFailure", func(t *testing.T) {
+		tests := []struct {
+			name        string
+			concurrency int
+			iterations  int
+			expectedMsg string
+		}{
+			{"TooManyConcurrent", 1001, 1, "concurrency exceeds maximum allowed (1000)"},
+			{"TooManyIterations", 1, 10000001, "iterations exceed maximum allowed (10,000,000)"},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				payload := ExecRequest{
+					Exec:        "echo hello",
+					Concurrency: tt.concurrency,
+					Iterations:  tt.iterations,
+				}
+				body, _ := json.Marshal(payload)
+				req := httptest.NewRequest("POST", "/exec", bytes.NewBuffer(body))
+				req.Header.Set("Content-Type", "application/json")
+				rr := httptest.NewRecorder()
+
+				s.ExecHandler(rr, req)
+
+				if rr.Code != http.StatusBadRequest {
+					t.Errorf("expected status 400, got %d", rr.Code)
+				}
+				var resp ExecResponse
+				_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+				if !strings.Contains(resp.Error, tt.expectedMsg) {
+					t.Errorf("expected error containing %q, got %q", tt.expectedMsg, resp.Error)
+				}
+			})
+		}
+	})
 }
 
 func TestExecHandlerWithAuth(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "super-secret", "", "", "", "", registry)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "super-secret", "", "", "", "", registry, 1, 1)
 	s.Status = StatusReady
 
 	validPayload := ExecRequest{
@@ -370,7 +436,7 @@ func TestExecHandlerWithAuth(t *testing.T) {
 
 func TestExecHandlerWithBasicAuth(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "admin:secret", "", "", "", registry)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "admin:secret", "", "", "", registry, 1, 1)
 	s.Status = StatusReady
 
 	validPayload := ExecRequest{
@@ -440,7 +506,7 @@ func TestExecHandlerWithBasicAuth(t *testing.T) {
 
 func TestExecHandlerWithHmac(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "hmac-secret", "", "", registry)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "hmac-secret", "", "", registry, 1, 1)
 	s.Status = StatusReady
 
 	validPayload := ExecRequest{
@@ -518,7 +584,7 @@ func TestStartTLS_MissingFiles(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "nonexistent.cert", "nonexistent.key", engine.NewBuiltinRegistry())
+	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "nonexistent.cert", "nonexistent.key", engine.NewBuiltinRegistry(), 1, 1)
 	err := s.Start(ctx)
 
 	if err == nil {

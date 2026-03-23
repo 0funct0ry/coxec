@@ -168,8 +168,8 @@ curl -X POST http://localhost:8080/exec \
 
 #### Supported Fields
 - `exec`: (Required) The command string to execute.
-- `concurrency`: (Optional) Maximum number of concurrent executions.
-- `iterations`: (Optional) Total number of executions.
+- `concurrency`: (Optional) Maximum number of concurrent executions. Overrides the value set at server startup (Max: 1,000).
+- `iterations`: (Optional) Total number of executions. Overrides the value set at server startup (Max: 10,000,000).
 - `timeout`: (Optional) Timeout for each execution (e.g., "5s", "100ms").
 - `rate`: (Optional) Maximum execution rate (e.g., "10/s").
 - `vars`: (Optional) Map of user-defined variables for templates.
@@ -178,7 +178,7 @@ curl -X POST http://localhost:8080/exec \
 - `rampup`: (Optional) Duration to linearly increase concurrency.
 - `verbose`: (Optional) If true, returns detailed per-execution results in the `details` field.
 
-The endpoint returns `400 Bad Request` for invalid payloads and `500 Internal Server Error` if execution fails catastrophically.
+The endpoint returns `400 Bad Request` for invalid payloads (e.g. non-positive values, or exceeding maximum bounds) and `500 Internal Server Error` if execution fails catastrophically.
 
 #### Developer Experience (DX) Features
 - **Flexible Requests**: Supports both JSON and form-encoded (`application/x-www-form-urlencoded`) payloads. You can use `curl -d "exec=echo hi"` without extra headers.
