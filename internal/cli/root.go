@@ -72,10 +72,11 @@ func validateExecutionSource(executeCmd, fileFlag, templateFlag string, serverFl
 	return nil
 }
 
-var rootCmd = &cobra.Command{
-	Use:   "coxec",
-	Short: "A swiss army knife for concurrent execution",
-	Long: `coxec is a CLI tool and server for concurrent execution, providing templates, built-in clients, timing control, and structured output.
+func NewRootCmd() *cobra.Command {
+	var cmd = &cobra.Command{
+		Use:   "coxec",
+		Short: "A swiss army knife for concurrent execution",
+		Long: `coxec is a CLI tool and server for concurrent execution, providing templates, built-in clients, timing control, and structured output.
 
 Execution source (exactly one required):
   -e, --exec string      Shell command or built-in to execute repeatedly
@@ -92,23 +93,27 @@ Built-in clients execute natively without spawning a shell:
 Server-only flags (when using -s):
   -a, --addr string      Bind address (default: 127.0.0.1)
   -p, --port int         Listening port (default: 8080)
+  --tls-cert string      Path to TLS certificate file (PEM format)
+  --tls-key string       Path to TLS private key file (PEM format)
 
 By default: only command stdout appears on stdout; summary and diagnostics go to stderr.
 Use -v / --verbose to see detailed per-execution information on stderr.
 Use --silent to suppress all output from executed commands.
-Use 2>/dev/null or redirect stderr to hide the summary.`,
+Use 2>/dev/null or redirect stderr to hide the summary.
+`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Version flag handled by cobra
 		versionFlag, _ := cmd.Flags().GetBool("version")
-		verboseFlag, _ := cmd.Flags().GetBool("verbose")
-		silentFlag, _ := cmd.Flags().GetBool("silent")
-		reportFlag, _ := cmd.Flags().GetBool("report")
 		if versionFlag {
 			fmt.Printf("coxec version %s\n", Version)
 			return nil
 		}
 
+		verboseFlag, _ := cmd.Flags().GetBool("verbose")
+		silentFlag, _ := cmd.Flags().GetBool("silent")
+		reportFlag, _ := cmd.Flags().GetBool("report")
 		serverFlag, _ := cmd.Flags().GetBool("server")
 		addr, _ := cmd.Flags().GetString("addr")
 		port, _ := cmd.Flags().GetInt("port")
@@ -133,6 +138,12 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			return err
 		}
 
+		authToken, _ := cmd.Flags().GetString("auth-token")
+		authBasic, _ := cmd.Flags().GetString("auth-basic")
+		authHmacSecret, _ := cmd.Flags().GetString("auth-hmac-secret")
+		tlsCert, _ := cmd.Flags().GetString("tls-cert")
+		tlsKey, _ := cmd.Flags().GetString("tls-key")
+
 		rampup, _ := cmd.Flags().GetDuration("rampup")
 
 		if !cmd.Flags().Changed("iterations") {
@@ -143,13 +154,23 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			return err
 		}
 
+		// Validate TLS flags
+		if (tlsCert != "") != (tlsKey != "") {
+			return &ValidationError{
+				ExitCode:   validationExitCode,
+				ID:         "INVALID_AUTH_FLAGS",
+				Message:    "both --tls-cert and --tls-key must be provided for HTTPS",
+				Suggestion: "provide both flags, or none to use HTTP",
+			}
+		}
+
 		registry := getBuiltinRegistry()
 
 		templateState := engine.NewTemplateState()
 
 		// Set up global context with interrupt signal handling
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer cancel()
+		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
 
 		// If global timeout is set, wrap the context
 		if globalTimeout > 0 {
@@ -158,35 +179,31 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			defer globalCancel()
 		}
 
-		authToken, _ := cmd.Flags().GetString("auth-token")
-		authBasic, _ := cmd.Flags().GetString("auth-basic")
-		authHmacSecret, _ := cmd.Flags().GetString("auth-hmac-secret")
-
-		authFlagsSet := 0
-		if authToken != "" {
-			authFlagsSet++
-		}
-		if authBasic != "" {
-			authFlagsSet++
-		}
-		if authHmacSecret != "" {
-			authFlagsSet++
-		}
-
-		if authFlagsSet > 1 {
-			return &ValidationError{
-				ExitCode:   validationExitCode,
-				ID:         "INVALID_ARGS",
-				Message:    "flags --auth-token, --auth-basic, and --auth-hmac-secret are mutually exclusive",
-				Suggestion: "use only one authentication method",
-			}
-		}
-
 		if serverFlag {
+			authFlagsSet := 0
+			if authToken != "" {
+				authFlagsSet++
+			}
+			if authBasic != "" {
+				authFlagsSet++
+			}
+			if authHmacSecret != "" {
+				authFlagsSet++
+			}
+
+			if authFlagsSet > 1 {
+				return &ValidationError{
+					ExitCode:   validationExitCode,
+					ID:         "INVALID_AUTH_FLAGS",
+					Message:    "authentication flags (--auth-token, --auth-basic, --auth-hmac-secret) are mutually exclusive",
+					Suggestion: "choose only one authentication method",
+				}
+			}
+
 			if authFlagsSet == 0 {
 				fmt.Fprintln(os.Stderr, "WARNING: Starting server without authentication. This is insecure and should only be used for local testing.")
 			}
-			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, registry)
+			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry)
 			return s.Start(ctx)
 		}
 
@@ -203,16 +220,9 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 			return fmt.Errorf("iterations (-n) must be greater than or equal to 0")
 		}
 
-
-
 		var activeCount atomic.Int32
 
 		if executeCmd != "" {
-			// Disable printing usage to avoid cluttering stderr on command failure
-			cmd.SilenceUsage = true
-			// We handle the error exiting locally to propagate exit code
-			cmd.SilenceErrors = true
-
 			actualConcurrency := concurrency
 			if iterations < concurrency {
 				actualConcurrency = iterations
@@ -245,9 +255,6 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 		}
 
 		if fileFlag != "" {
-			cmd.SilenceUsage = true
-			cmd.SilenceErrors = true
-
 			scriptContent, err := os.ReadFile(fileFlag)
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
@@ -288,6 +295,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				TemplateState: templateState,
 				Timeout:       timeout,
 				Delay:         delay,
+				Jitter:        jitter,
 				RampUp:        rampup,
 				ActiveCount:   &activeCount,
 				RateLimit:     rateLimit,
@@ -300,9 +308,6 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 		}
 
 		if templateFlag != "" {
-			cmd.SilenceUsage = true
-			cmd.SilenceErrors = true
-
 			tplContent, err := os.ReadFile(templateFlag)
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
@@ -374,6 +379,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 				TemplateState: templateState,
 				Timeout:       timeout,
 				Delay:         delay,
+				Jitter:        jitter,
 				RampUp:        rampup,
 				ActiveCount:   &activeCount,
 				RateLimit:     rateLimit,
@@ -387,37 +393,38 @@ Use 2>/dev/null or redirect stderr to hide the summary.`,
 
 		return nil
 	},
-}
+	}
 
-func init() {
-	rootCmd.Flags().Bool("version", false, "Print the version number")
-	rootCmd.Flags().BoolP("verbose", "v", false, "Show detailed per-execution information on stderr")
-	rootCmd.Flags().Bool("silent", false, "Suppress child stdout/stderr payload")
-	rootCmd.Flags().Bool("report", false, "Include HTTP-specific error breakdown in the execution output")
-	rootCmd.Flags().StringP("execute", "e", "", "Shell command or built-in to execute repeatedly")
-	rootCmd.Flags().StringP("file", "f", "", "Path to shell script file to execute repeatedly")
-	rootCmd.Flags().StringP("template", "t", "", "Path to Go template file defining the execution plan")
-	rootCmd.Flags().IntP("concurrency", "c", 1, "Number of concurrent executions")
-	rootCmd.Flags().IntP("iterations", "n", -1, "Total number of executions (defaults to concurrency)")
-	rootCmd.Flags().Duration("timeout", 0, "Maximum allowed duration for each individual execution (e.g. 5s, 100ms)")
-	rootCmd.Flags().Duration("global-timeout", 0, "Maximum total wall-clock time for the entire run (e.g. 15m, 1h)")
-	rootCmd.Flags().Duration("delay", 0, "Fixed delay between worker starts (e.g. 400ms, 1s)")
-	rootCmd.Flags().Duration("jitter", 0, "Random jitter added to delay (e.g. 100ms). Final delay is delay ± jitter")
-	rootCmd.Flags().Duration("rampup", 0, "Gradually increase concurrency over this duration (e.g. 30s, 2m)")
-	rootCmd.Flags().String("rate", "", "Maximum rate of executions (e.g. 50/s, 100/m, 1/h)")
-	rootCmd.Flags().StringArray("var", nil, "Set user variables (key=value)")
-	rootCmd.Flags().Bool("json", false, "Output validation errors as JSON")
-	rootCmd.Flags().BoolP("server", "s", false, "Start coxec in server mode")
-	rootCmd.Flags().StringP("addr", "a", "127.0.0.1", "Bind address for the server")
-	rootCmd.Flags().IntP("port", "p", 8080, "Port to listen on")
-	rootCmd.Flags().String("auth-token", "", "Bearer token required for server API requests (except /health)")
-	rootCmd.Flags().String("auth-basic", "", "Basic auth credentials in user:pass format required for server API requests (except /health)")
-	rootCmd.Flags().String("auth-hmac-secret", "", "HMAC secret required for server API requests (except /health)")
+	cmd.Flags().Bool("version", false, "Print the version number")
+	cmd.Flags().BoolP("verbose", "v", false, "Show detailed per-execution information on stderr")
+	cmd.Flags().Bool("silent", false, "Suppress child stdout/stderr payload")
+	cmd.Flags().Bool("report", false, "Include HTTP-specific error breakdown in the execution output")
+	cmd.Flags().StringP("execute", "e", "", "Shell command or built-in to execute repeatedly")
+	cmd.Flags().StringP("file", "f", "", "Path to shell script file to execute repeatedly")
+	cmd.Flags().StringP("template", "t", "", "Path to Go template file defining the execution plan")
+	cmd.Flags().IntP("concurrency", "c", 1, "Number of concurrent executions")
+	cmd.Flags().IntP("iterations", "n", -1, "Total number of executions (defaults to concurrency)")
+	cmd.Flags().Duration("timeout", 0, "Maximum allowed duration for each individual execution (e.g. 5s, 100ms)")
+	cmd.Flags().Duration("global-timeout", 0, "Maximum total wall-clock time for the entire run (e.g. 15m, 1h)")
+	cmd.Flags().Duration("delay", 0, "Fixed delay between worker starts (e.g. 400ms, 1s)")
+	cmd.Flags().Duration("jitter", 0, "Random jitter added to delay (e.g. 100ms). Final delay is delay ± jitter")
+	cmd.Flags().Duration("rampup", 0, "Gradually increase concurrency over this duration (e.g. 30s, 2m)")
+	cmd.Flags().String("rate", "", "Maximum rate of executions (e.g. 50/s, 100/m, 1/h)")
+	cmd.Flags().StringArray("var", nil, "Set user variables (key=value)")
+	cmd.Flags().Bool("json", false, "Output validation errors as JSON")
+	cmd.Flags().BoolP("server", "s", false, "Start coxec in server mode")
+	cmd.Flags().StringP("addr", "a", "127.0.0.1", "Bind address for the server")
+	cmd.Flags().IntP("port", "p", 8080, "Port to listen on")
+	cmd.Flags().String("auth-token", "", "Bearer token required for server API requests (except /health)")
+	cmd.Flags().String("auth-basic", "", "Basic auth credentials in user:pass format required for server API requests (except /health)")
+	cmd.Flags().String("auth-hmac-secret", "", "HMAC secret required for server API requests (except /health)")
+	cmd.Flags().String("tls-cert", "", "Path to TLS certificate file (PEM format)")
+	cmd.Flags().String("tls-key", "", "Path to TLS private key file (PEM format)")
 
 	// Register built-in client subcommands for help and discovery
 	registry := getBuiltinRegistry()
 	builtinGroup := &cobra.Group{ID: "builtins", Title: "Available Built-in clients:"}
-	rootCmd.AddGroup(builtinGroup)
+	cmd.AddGroup(builtinGroup)
 
 	for name, helpText := range registry.AllHelp() {
 		builtinCmd := &cobra.Command{
@@ -437,8 +444,16 @@ func init() {
 				}
 			},
 		}
-		rootCmd.AddCommand(builtinCmd)
+		cmd.AddCommand(builtinCmd)
 	}
+
+	return cmd
+}
+
+var rootCmd = NewRootCmd()
+
+func init() {
+	// Root flags are now initialized in NewRootCmd
 }
 
 func getBuiltinRegistry() *engine.BuiltinRegistry {

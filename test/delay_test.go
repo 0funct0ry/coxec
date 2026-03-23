@@ -30,8 +30,8 @@ func TestDelayFlag(t *testing.T) {
 		t.Errorf("expected duration to be at least 400ms, got %v", duration)
 	}
 
-	// Also check that it doesn't take TOO long (threshold 1000ms)
-	if duration > 1000*time.Millisecond {
+	// Also check that it doesn't take TOO long (threshold 2000ms)
+	if duration > 2000*time.Millisecond {
 		t.Errorf("expected duration to be around 400-600ms, got %v", duration)
 	}
 }

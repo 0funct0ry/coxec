@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -36,11 +37,14 @@ type Server struct {
 	Port           int
 	Version        string
 	StartTime      time.Time
+	mu             sync.RWMutex
 	Status         ServerStatus
 	ActiveJobs     atomic.Int32
 	AuthToken      string
 	AuthBasic      string
 	AuthHmacSecret string
+	TLSCert        string
+	TLSKey         string
 	Registry       *engine.BuiltinRegistry
 }
 
@@ -66,7 +70,7 @@ type ExecResponse struct {
 }
 
 // NewServer creates a new Server instance.
-func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, registry *engine.BuiltinRegistry) *Server {
+func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry) *Server {
 	return &Server{
 		Addr:           addr,
 		Port:           port,
@@ -74,6 +78,8 @@ func NewServer(addr string, port int, version string, authToken string, authBasi
 		AuthToken:      authToken,
 		AuthBasic:      authBasic,
 		AuthHmacSecret: authHmacSecret,
+		TLSCert:        tlsCert,
+		TLSKey:         tlsKey,
 		StartTime:      time.Now(),
 		Status:         StatusStarting,
 		Registry:       registry,
@@ -84,8 +90,8 @@ func NewServer(addr string, port int, version string, authToken string, authBasi
 func (s *Server) Start(ctx context.Context) error {
 	fullAddr := fmt.Sprintf("%s:%d", s.Addr, s.Port)
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", s.healthHandler)
-	mux.HandleFunc("/exec", s.execHandler)
+	mux.HandleFunc("/health", s.HealthHandler)
+	mux.HandleFunc("/exec", s.ExecHandler)
 
 	srv := &http.Server{
 		Addr:    fullAddr,
@@ -94,9 +100,22 @@ func (s *Server) Start(ctx context.Context) error {
 
 	errChan := make(chan error, 1)
 	go func() {
-		fmt.Printf("coxec server listening on %s\n", fullAddr)
+		protocol := "http"
+		useTLS := s.TLSCert != "" && s.TLSKey != ""
+		if useTLS {
+			protocol = "https"
+		}
+		fmt.Printf("coxec server listening on %s (%s)\n", fullAddr, protocol)
+		s.mu.Lock()
 		s.Status = StatusReady
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		s.mu.Unlock()
+		var err error
+		if useTLS {
+			err = srv.ListenAndServeTLS(s.TLSCert, s.TLSKey)
+		} else {
+			err = srv.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
 			errChan <- err
 		}
 	}()
@@ -104,7 +123,9 @@ func (s *Server) Start(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		fmt.Println("\nShutting down server...")
+		s.mu.Lock()
 		s.Status = StatusShuttingDown
+		s.mu.Unlock()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return srv.Shutdown(shutdownCtx)
@@ -113,11 +134,15 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 }
 
-func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
-	if s.Status != StatusReady {
+func (s *Server) HealthHandler(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	currentStatus := s.Status
+	s.mu.RUnlock()
+
+	if currentStatus != StatusReady {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_ = json.NewEncoder(w).Encode(map[string]string{
-			"status": string(s.Status),
+			"status": string(currentStatus),
 		})
 		return
 	}
@@ -132,13 +157,18 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) execHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) ExecHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
+		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "method not allowed"})
 		return
 	}
 
-	if s.Status != StatusReady {
+	s.mu.RLock()
+	currentStatus := s.Status
+	s.mu.RUnlock()
+
+	if currentStatus != StatusReady {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "server is not ready"})
 		return

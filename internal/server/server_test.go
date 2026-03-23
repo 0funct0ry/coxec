@@ -12,18 +12,19 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"context"
 
 	"github.com/0funct0ry/coxec/internal/engine"
 )
 
 func TestHealthCheck(t *testing.T) {
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "", engine.NewBuiltinRegistry())
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "", "", "", engine.NewBuiltinRegistry())
 	
 	t.Run("StatusStarting", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/health", nil)
 		rr := httptest.NewRecorder()
 		
-		s.healthHandler(rr, req)
+		s.HealthHandler(rr, req)
 		
 		if rr.Code != http.StatusServiceUnavailable {
 			t.Errorf("expected status 503, got %d", rr.Code)
@@ -46,7 +47,7 @@ func TestHealthCheck(t *testing.T) {
 		req := httptest.NewRequest("GET", "/health", nil)
 		rr := httptest.NewRecorder()
 		
-		s.healthHandler(rr, req)
+		s.HealthHandler(rr, req)
 		
 		if rr.Code != http.StatusOK {
 			t.Errorf("expected status 200, got %d", rr.Code)
@@ -77,7 +78,7 @@ func TestHealthCheck(t *testing.T) {
 		req := httptest.NewRequest("GET", "/health", nil)
 		rr := httptest.NewRecorder()
 		
-		s.healthHandler(rr, req)
+		s.HealthHandler(rr, req)
 		
 		if rr.Code != http.StatusServiceUnavailable {
 			t.Errorf("expected status 503, got %d", rr.Code)
@@ -96,7 +97,7 @@ func TestHealthCheck(t *testing.T) {
 func TestExecHandler(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
 	registry.Register(engine.NewSleepClient())
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "", registry)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "", "", "", registry)
 	s.Status = StatusReady
 
 	t.Run("ValidRequest", func(t *testing.T) {
@@ -111,7 +112,7 @@ func TestExecHandler(t *testing.T) {
 		req.Header.Set("Accept", "application/json")
 		rr := httptest.NewRecorder()
 
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusOK {
 			t.Errorf("expected status 200, got %d", rr.Code)
@@ -141,7 +142,7 @@ func TestExecHandler(t *testing.T) {
 		req := httptest.NewRequest("POST", "/exec", bytes.NewBuffer(body))
 		rr := httptest.NewRecorder()
 
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusBadRequest {
 			t.Errorf("expected status 400, got %d", rr.Code)
@@ -152,7 +153,7 @@ func TestExecHandler(t *testing.T) {
 		req := httptest.NewRequest("POST", "/exec", strings.NewReader("invalid json"))
 		rr := httptest.NewRecorder()
 
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusBadRequest {
 			t.Errorf("expected status 400, got %d", rr.Code)
@@ -166,7 +167,7 @@ func TestExecHandler(t *testing.T) {
 		req := httptest.NewRequest("POST", "/exec", bytes.NewBuffer(body))
 		rr := httptest.NewRecorder()
 
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusServiceUnavailable {
 			t.Errorf("expected status 503, got %d", rr.Code)
@@ -187,7 +188,7 @@ func TestExecHandler(t *testing.T) {
 		req.Header.Set("Accept", "application/json")
 		rr := httptest.NewRecorder()
 
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusOK {
 			t.Errorf("expected status 200, got %d", rr.Code)
@@ -222,7 +223,7 @@ func TestExecHandler(t *testing.T) {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		rr := httptest.NewRecorder()
 
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusOK {
 			t.Errorf("expected status 200, got %d", rr.Code)
@@ -242,7 +243,7 @@ func TestExecHandler(t *testing.T) {
 		// No Accept header, and no Content-Type on request (Wait, json.Marshal above doesn't set it)
 		rr := httptest.NewRecorder()
 
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusOK {
 			t.Errorf("expected status 200, got %d", rr.Code)
@@ -260,7 +261,7 @@ func TestExecHandler(t *testing.T) {
 		req.Header.Set("Accept", "application/json")
 		rr := httptest.NewRecorder()
 
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusOK {
 			t.Errorf("expected status 200, got %d", rr.Code)
@@ -288,7 +289,7 @@ func TestExecHandler(t *testing.T) {
 		req.Header.Set("Accept", "application/json")
 		rr := httptest.NewRecorder()
 
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusOK {
 			t.Errorf("expected status 200, got %d", rr.Code)
@@ -307,7 +308,7 @@ func TestExecHandler(t *testing.T) {
 
 func TestExecHandlerWithAuth(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "super-secret", "", "", registry)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "super-secret", "", "", "", "", registry)
 	s.Status = StatusReady
 
 	validPayload := ExecRequest{
@@ -329,7 +330,7 @@ func TestExecHandlerWithAuth(t *testing.T) {
 	t.Run("MissingToken", func(t *testing.T) {
 		req := makeReq("")
 		rr := httptest.NewRecorder()
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusUnauthorized {
 			t.Errorf("expected status 401, got %d", rr.Code)
@@ -339,7 +340,7 @@ func TestExecHandlerWithAuth(t *testing.T) {
 	t.Run("MalformedToken", func(t *testing.T) {
 		req := makeReq("super-secret") // missing Bearer prefix
 		rr := httptest.NewRecorder()
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusUnauthorized {
 			t.Errorf("expected status 401, got %d", rr.Code)
@@ -349,7 +350,7 @@ func TestExecHandlerWithAuth(t *testing.T) {
 	t.Run("IncorrectToken", func(t *testing.T) {
 		req := makeReq("Bearer wrong-token")
 		rr := httptest.NewRecorder()
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusUnauthorized {
 			t.Errorf("expected status 401, got %d", rr.Code)
@@ -359,7 +360,7 @@ func TestExecHandlerWithAuth(t *testing.T) {
 	t.Run("CorrectToken", func(t *testing.T) {
 		req := makeReq("Bearer super-secret")
 		rr := httptest.NewRecorder()
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusOK {
 			t.Errorf("expected status 200, got %d", rr.Code)
@@ -369,7 +370,7 @@ func TestExecHandlerWithAuth(t *testing.T) {
 
 func TestExecHandlerWithBasicAuth(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "admin:secret", "", registry)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "admin:secret", "", "", "", registry)
 	s.Status = StatusReady
 
 	validPayload := ExecRequest{
@@ -391,7 +392,7 @@ func TestExecHandlerWithBasicAuth(t *testing.T) {
 	t.Run("MissingCredentials", func(t *testing.T) {
 		req := makeReq("")
 		rr := httptest.NewRecorder()
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusUnauthorized {
 			t.Errorf("expected status 401, got %d", rr.Code)
@@ -404,7 +405,7 @@ func TestExecHandlerWithBasicAuth(t *testing.T) {
 	t.Run("MalformedCredentials", func(t *testing.T) {
 		req := makeReq("Basic notbase64!!!")
 		rr := httptest.NewRecorder()
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusUnauthorized {
 			t.Errorf("expected status 401, got %d", rr.Code)
@@ -418,7 +419,7 @@ func TestExecHandlerWithBasicAuth(t *testing.T) {
 		// wrong:password base64 = d3Jvbmc6cGFzc3dvcmQ=
 		req := makeReq("Basic d3Jvbmc6cGFzc3dvcmQ=")
 		rr := httptest.NewRecorder()
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusUnauthorized {
 			t.Errorf("expected status 401, got %d", rr.Code)
@@ -429,7 +430,7 @@ func TestExecHandlerWithBasicAuth(t *testing.T) {
 		// admin:secret base64 = YWRtaW46c2VjcmV0
 		req := makeReq("Basic YWRtaW46c2VjcmV0")
 		rr := httptest.NewRecorder()
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusOK {
 			t.Errorf("expected status 200, got %d", rr.Code)
@@ -439,7 +440,7 @@ func TestExecHandlerWithBasicAuth(t *testing.T) {
 
 func TestExecHandlerWithHmac(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "hmac-secret", registry)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "hmac-secret", "", "", registry)
 	s.Status = StatusReady
 
 	validPayload := ExecRequest{
@@ -461,7 +462,7 @@ func TestExecHandlerWithHmac(t *testing.T) {
 	t.Run("MissingSignature", func(t *testing.T) {
 		req := makeReq("")
 		rr := httptest.NewRecorder()
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusUnauthorized {
 			t.Errorf("expected status 401, got %d", rr.Code)
@@ -471,7 +472,7 @@ func TestExecHandlerWithHmac(t *testing.T) {
 	t.Run("MalformedSignatureMissingPrefix", func(t *testing.T) {
 		req := makeReq("1234abcd")
 		rr := httptest.NewRecorder()
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusUnauthorized {
 			t.Errorf("expected status 401, got %d", rr.Code)
@@ -481,7 +482,7 @@ func TestExecHandlerWithHmac(t *testing.T) {
 	t.Run("MalformedSignatureNotHex", func(t *testing.T) {
 		req := makeReq("sha256=nothex")
 		rr := httptest.NewRecorder()
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusUnauthorized {
 			t.Errorf("expected status 401, got %d", rr.Code)
@@ -491,7 +492,7 @@ func TestExecHandlerWithHmac(t *testing.T) {
 	t.Run("IncorrectSignature", func(t *testing.T) {
 		req := makeReq("sha256=" + "1234abcd")
 		rr := httptest.NewRecorder()
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusUnauthorized {
 			t.Errorf("expected status 401, got %d", rr.Code)
@@ -505,10 +506,25 @@ func TestExecHandlerWithHmac(t *testing.T) {
 
 		req := makeReq("sha256=" + sig)
 		rr := httptest.NewRecorder()
-		s.execHandler(rr, req)
+		s.ExecHandler(rr, req)
 
 		if rr.Code != http.StatusOK {
 			t.Errorf("expected status 200, got %d", rr.Code)
 		}
 	})
+}
+
+func TestStartTLS_MissingFiles(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "nonexistent.cert", "nonexistent.key", engine.NewBuiltinRegistry())
+	err := s.Start(ctx)
+
+	if err == nil {
+		t.Error("expected error when starting server with missing TLS files, got nil")
+	}
+	if !strings.Contains(err.Error(), "open nonexistent.cert") && !strings.Contains(err.Error(), "no such file") {
+		t.Errorf("expected file not found error, got: %v", err)
+	}
 }

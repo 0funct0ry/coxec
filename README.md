@@ -101,6 +101,15 @@ You can secure the `/exec` endpoint with a Bearer token:
 coxec --server --port 9000 --auth-token "super-secret-token"
 ```
 
+#### HTTPS (TLS)
+Enable encryption in transit by providing certificate and key files (PEM format):
+
+```bash
+coxec --server --port 8443 --tls-cert cert.pem --tls-key key.pem
+```
+
+The server will listen on HTTPS when both flags are provided. If one is missing, the server will fail to start.
+
 #### Health Check
 Verify the server status using the `/health` endpoint:
 
@@ -196,6 +205,8 @@ The endpoint returns `400 Bad Request` for invalid payloads and `500 Internal Se
 - `--auth-token string`: Bearer token required for server API requests (except `/health`).
 - `--auth-basic string`: Basic auth credentials in `user:pass` format required for server API requests (except `/health`).
 - `--auth-hmac-secret string`: HMAC secret for verifying `X-Signature: sha256=<hex>` headers on server API requests (except `/health`).
+- `--tls-cert string`: Path to TLS certificate file (PEM format).
+- `--tls-key string`: Path to TLS private key file (PEM format).
 - `-c, --concurrency int`: Number of concurrent workers. (default: `1`)
 - `-n, --iterations int`: Total number of executions (defaults to `--concurrency`).
 - `--rate string`: Maximum execution rate (e.g., `50/s`, `10/m`, `1/h`).
