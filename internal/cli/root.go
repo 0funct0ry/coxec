@@ -236,7 +236,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 			if loadedConfig != "" {
 				fmt.Fprintf(os.Stderr, "Config loaded from: %s\n", loadedConfig)
 			}
-			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations, maxConcurrentJobs, enableSync)
+			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations, maxConcurrentJobs, enableSync, server.NewInMemoryJobStore())
 			return s.Start(ctx)
 		}
 

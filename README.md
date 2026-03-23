@@ -195,6 +195,29 @@ curl -X POST http://localhost:8080/exec \
 }
 ```
 
+#### Asynchronous Execution
+Submit a job and receive a `job_id` immediately without waiting for it to finish. Use the `/async/exec` endpoint:
+
+```bash
+curl -i -X POST http://localhost:8080/async/exec \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: my-request-123" \
+  -d '{
+    "exec": ".sleep 10s",
+    "iterations": 10
+  }'
+```
+
+**Response (202 Accepted):**
+```json
+{
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "queued"
+}
+```
+
+The `Idempotency-Key` header is supported to prevent duplicate job submissions. If a job with the same key already exists, the server returns the existing `job_id` with a `200 OK` status.
+
 #### Supported Fields
 - `exec`: (Required) The command string to execute.
 - `concurrency`: (Optional) Maximum number of concurrent executions. Overrides the value set at server startup (Max: 1,000).

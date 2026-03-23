@@ -17,8 +17,8 @@ import (
 	"time"
 )
 
-// generateUUIDv4 generates a basic v4-compliant UUID string using crypto/rand
-func generateUUIDv4() string {
+// GenerateUUIDv4 generates a basic v4-compliant UUID string using crypto/rand
+func GenerateUUIDv4() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	b[6] = (b[6] & 0x0f) | 0x40
@@ -86,7 +86,7 @@ func RunPipeline(task Task, opts ExecOptions) error {
 		task.Timestamp = time.Now()
 	}
 	if task.UUID == "" {
-		task.UUID = generateUUIDv4()
+		task.UUID = GenerateUUIDv4()
 	}
 
 	ctx := opts.Context

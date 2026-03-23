@@ -50,6 +50,7 @@ type Server struct {
 	DefaultIterations  int
 	MaxConcurrentJobs  int
 	EnableSync         bool
+	JobStore           JobStore
 }
 
 // ExecRequest defines the payload for POST /exec
@@ -74,7 +75,7 @@ type ExecResponse struct {
 }
 
 // NewServer creates a new Server instance.
-func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry, defaultConcurrency, defaultIterations int, maxConcurrentJobs int, enableSync bool) *Server {
+func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry, defaultConcurrency, defaultIterations int, maxConcurrentJobs int, enableSync bool, jobStore JobStore) *Server {
 	return &Server{
 		Addr:               addr,
 		Port:               port,
@@ -91,6 +92,7 @@ func NewServer(addr string, port int, version string, authToken string, authBasi
 		DefaultIterations:  defaultIterations,
 		MaxConcurrentJobs:  maxConcurrentJobs,
 		EnableSync:         enableSync,
+		JobStore:           jobStore,
 	}
 }
 
@@ -100,6 +102,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.HealthHandler)
 	mux.HandleFunc("/exec", s.ExecHandler)
+	mux.HandleFunc("/async/exec", s.AsyncExecHandler)
 
 	srv := &http.Server{
 		Addr:    fullAddr,
@@ -188,19 +191,232 @@ func (s *Server) ExecHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	req, body, errorRes := s.validateAndParseRequest(w, r)
+	if errorRes != nil {
+		w.WriteHeader(errorRes.code)
+		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: errorRes.err})
+		return
+	}
+
+	execStr, concurrency, iterations, _, err := s.prepareExecPlan(req, body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: err.Error()})
+		return
+	}
+
+	fmt.Printf("[%s] Executing: %s (Concurrency: %d, Iterations: %d)\n", time.Now().Format(time.RFC3339), execStr, concurrency, iterations)
+
+	timeout, _ := time.ParseDuration(req.Timeout)
+	delay, _ := time.ParseDuration(req.Delay)
+	jitter, _ := time.ParseDuration(req.Jitter)
+	rampup, _ := time.ParseDuration(req.RampUp)
+
+	rateLimit := s.parseRateLimit(req.Rate)
+
+	s.ActiveJobs.Add(1)
+	defer s.ActiveJobs.Add(-1)
+
+	opts := engine.ExecOptions{
+		Silent:        false,
+		Verbose:       req.Verbose,
+		Report:        true,
+		TotalTasks:    iterations,
+		Context:       r.Context(),
+		Stdout:        &strings.Builder{},
+		Stderr:        &strings.Builder{},
+		UserVars:      req.Vars,
+		Registry:      s.Registry,
+		TemplateState: engine.NewTemplateState(),
+		Timeout:       timeout,
+		Delay:         delay,
+		Jitter:        jitter,
+		RampUp:        rampup,
+		RateLimit:     rateLimit,
+	}
+
+	tasks := s.generateTasks(r.Context(), iterations, execStr, rateLimit, delay, jitter)
+
+	report, err := engine.RunJobPool(concurrency, tasks, opts)
+	if err != nil && report == nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: err.Error()})
+		return
+	}
+
+	// Response negotiation
+	accept := r.Header.Get("Accept")
+	useJSON := strings.Contains(accept, "application/json")
+	if !useJSON && strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+		// If they sent JSON, they probably want JSON back unless they explicitly asked for something else
+		useJSON = true
+	}
+	if accept == "*/*" || accept == "" {
+		// Default to text for curl/browsers unless they specifically asked for JSON or sent JSON
+		if !strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+			useJSON = false
+		}
+	}
+
+	if useJSON {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(ExecResponse{
+			Status: "ok",
+			Report: report,
+		})
+		return
+	}
+
+	// Default to plain text
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(s.formatReportText(report)))
+}
+
+func (s *Server) AsyncExecHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "method not allowed"})
+		return
+	}
+
+	s.mu.RLock()
+	currentStatus := s.Status
+	s.mu.RUnlock()
+
+	if currentStatus != StatusReady {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "server is not ready"})
+		return
+	}
+
+	// Check Idempotency-Key
+	idempotencyKey := r.Header.Get("Idempotency-Key")
+	if idempotencyKey != "" {
+		if existingID, ok := s.JobStore.GetByIdempotencyKey(idempotencyKey); ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"job_id": existingID,
+				"status": "queued",
+			})
+			return
+		}
+	}
+
+	req, body, errorRes := s.validateAndParseRequest(w, r)
+	if errorRes != nil {
+		w.WriteHeader(errorRes.code)
+		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: errorRes.err})
+		return
+	}
+
+	execStr, concurrency, iterations, _, err := s.prepareExecPlan(req, body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: err.Error()})
+		return
+	}
+
+	jobID := engine.GenerateUUIDv4()
+	job := &Job{
+		ID:        jobID,
+		Status:    JobStatusQueued,
+		Request:   req,
+		CreatedAt: time.Now(),
+	}
+
+	if idempotencyKey != "" {
+		s.JobStore.SetIdempotencyKey(idempotencyKey, jobID)
+	}
+
+	if err := s.JobStore.Create(job); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "failed to create job"})
+		return
+	}
+
+	// Start background execution
+	go func() {
+		s.ActiveJobs.Add(1)
+		defer s.ActiveJobs.Add(-1)
+
+		now := time.Now()
+		job.StartedAt = &now
+		job.Status = JobStatusRunning
+		_ = s.JobStore.Update(job)
+
+		timeout, _ := time.ParseDuration(req.Timeout)
+		delay, _ := time.ParseDuration(req.Delay)
+		jitter, _ := time.ParseDuration(req.Jitter)
+		rampup, _ := time.ParseDuration(req.RampUp)
+		rateLimit := s.parseRateLimit(req.Rate)
+
+		// Create a background context with the same timeout as the request if provided
+		ctx := context.Background()
+		if timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, timeout)
+			defer cancel()
+		}
+
+		opts := engine.ExecOptions{
+			Silent:        true,
+			Verbose:       req.Verbose,
+			Report:        true,
+			TotalTasks:    iterations,
+			Context:       ctx,
+			Stdout:        &strings.Builder{},
+			Stderr:        &strings.Builder{},
+			UserVars:      req.Vars,
+			Registry:      s.Registry,
+			TemplateState: engine.NewTemplateState(),
+			Timeout:       timeout,
+			Delay:         delay,
+			Jitter:        jitter,
+			RampUp:        rampup,
+			RateLimit:     rateLimit,
+		}
+
+		tasks := s.generateTasks(ctx, iterations, execStr, rateLimit, delay, jitter)
+		report, err := engine.RunJobPool(concurrency, tasks, opts)
+
+		doneAt := time.Now()
+		job.CompletedAt = &doneAt
+		if err != nil {
+			job.Status = JobStatusFailed
+			job.Error = err.Error()
+		} else {
+			job.Status = JobStatusCompleted
+		}
+		job.Report = report
+		_ = s.JobStore.Update(job)
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"job_id": jobID,
+		"status": "queued",
+	})
+}
+
+type errorResponse struct {
+	code int
+	err  string
+}
+
+func (s *Server) validateAndParseRequest(w http.ResponseWriter, r *http.Request) (ExecRequest, []byte, *errorResponse) {
 	if s.AuthToken != "" {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-			w.WriteHeader(http.StatusUnauthorized)
-			_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "unauthorized"})
-			return
+			return ExecRequest{}, nil, &errorResponse{http.StatusUnauthorized, "unauthorized"}
 		}
 		
 		token := strings.TrimPrefix(authHeader, "Bearer ")
 		if subtle.ConstantTimeCompare([]byte(token), []byte(s.AuthToken)) != 1 {
-			w.WriteHeader(http.StatusUnauthorized)
-			_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "unauthorized"})
-			return
+			return ExecRequest{}, nil, &errorResponse{http.StatusUnauthorized, "unauthorized"}
 		}
 	}
 
@@ -208,38 +424,26 @@ func (s *Server) ExecHandler(w http.ResponseWriter, r *http.Request) {
 		user, pass, ok := r.BasicAuth()
 		if !ok {
 			w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
-			w.WriteHeader(http.StatusUnauthorized)
-			_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "unauthorized"})
-			return
+			return ExecRequest{}, nil, &errorResponse{http.StatusUnauthorized, "unauthorized"}
 		}
 
 		actualUserPass := user + ":" + pass
 		if subtle.ConstantTimeCompare([]byte(actualUserPass), []byte(s.AuthBasic)) != 1 {
-			w.WriteHeader(http.StatusUnauthorized)
-			_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "unauthorized"})
-			return
+			return ExecRequest{}, nil, &errorResponse{http.StatusUnauthorized, "unauthorized"}
 		}
 	}
 
-	var req ExecRequest
-	contentType := r.Header.Get("Content-Type")
-
-	// Read body for multiple parsing attempts and HMAC validation
 	rawBytes, _ := io.ReadAll(r.Body)
 
 	if s.AuthHmacSecret != "" {
 		hmacHeader := r.Header.Get("X-Signature")
 		if !strings.HasPrefix(hmacHeader, "sha256=") {
-			w.WriteHeader(http.StatusUnauthorized)
-			_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "unauthorized"})
-			return
+			return ExecRequest{}, nil, &errorResponse{http.StatusUnauthorized, "unauthorized"}
 		}
 		providedSig := strings.TrimPrefix(hmacHeader, "sha256=")
 		expectedBytes, err := hex.DecodeString(providedSig)
 		if err != nil {
-			w.WriteHeader(http.StatusUnauthorized)
-			_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "unauthorized"})
-			return
+			return ExecRequest{}, nil, &errorResponse{http.StatusUnauthorized, "unauthorized"}
 		}
 
 		mac := hmac.New(sha256.New, []byte(s.AuthHmacSecret))
@@ -247,23 +451,18 @@ func (s *Server) ExecHandler(w http.ResponseWriter, r *http.Request) {
 		computedSig := mac.Sum(nil)
 
 		if !hmac.Equal(computedSig, expectedBytes) {
-			w.WriteHeader(http.StatusUnauthorized)
-			_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "unauthorized"})
-			return
+			return ExecRequest{}, nil, &errorResponse{http.StatusUnauthorized, "unauthorized"}
 		}
 	}
 
-	r.Body = io.NopCloser(bytes.NewBuffer(rawBytes))
+	var req ExecRequest
+	// Pre-process
+	bodyBytes, _ := makeTemplateExprsJSONSafe(rawBytes)
 
-	// Pre-process: replace bare (unquoted) template expressions with string placeholders
-	// so the JSON is valid even with things like: "score": {{randInt 1 100}}
-	bodyBytes, placeholders := makeTemplateExprsJSONSafe(rawBytes)
-
-	// Try JSON regardless of Content-Type (good for DX with curl -d)
 	if err := json.NewDecoder(bytes.NewReader(bodyBytes)).Decode(&req); err == nil && req.Exec != nil {
 		// JSON success
 	} else {
-		// Reset and try form parsing using the original raw bytes
+		// Form parsing
 		r.Body = io.NopCloser(bytes.NewBuffer(rawBytes))
 		if err := r.ParseForm(); err == nil {
 			req.Exec = r.FormValue("exec")
@@ -277,47 +476,32 @@ func (s *Server) ExecHandler(w http.ResponseWriter, r *http.Request) {
 					req.Iterations = v
 				}
 			}
-			if req.Timeout == "" {
-				req.Timeout = r.FormValue("timeout")
-			}
-			if req.Rate == "" {
-				req.Rate = r.FormValue("rate")
-			}
-			if req.Delay == "" {
-				req.Delay = r.FormValue("delay")
-			}
-			if req.Jitter == "" {
-				req.Jitter = r.FormValue("jitter")
-			}
-			if req.RampUp == "" {
-				req.RampUp = r.FormValue("rampup")
-			}
-			if !req.Verbose {
-				req.Verbose, _ = strconv.ParseBool(r.FormValue("verbose"))
-			}
+			req.Timeout = r.FormValue("timeout")
+			req.Rate = r.FormValue("rate")
+			req.Delay = r.FormValue("delay")
+			req.Jitter = r.FormValue("jitter")
+			req.RampUp = r.FormValue("rampup")
+			req.Verbose, _ = strconv.ParseBool(r.FormValue("verbose"))
 		}
 	}
 
+	return req, bodyBytes, nil
+}
+
+func (s *Server) prepareExecPlan(req ExecRequest, bodyBytes []byte) (string, int, int, map[string]string, error) {
+	_, placeholders := makeTemplateExprsJSONSafe(bodyBytes)
 	execStr, err := s.resolveExec(req.Exec)
 	if err != nil || execStr == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "missing or invalid 'exec' field"})
-		return
+		return "", 0, 0, nil, fmt.Errorf("missing or invalid 'exec' field")
 	}
 
-	// Restore placeholder template expressions in the resolved exec command string.
-	// The placeholders were inserted as JSON string values (with surrounding quotes),
-	// so we need to replace the quoted form "...__COXEC_TMPL_N__..." back to the bare
-	// original expression (without quotes) to preserve the intended JSON type.
 	for key, original := range placeholders {
-		// Replace the quoted placeholder (as it appears after json.Marshal) with bare expression
 		execStr = strings.ReplaceAll(execStr, `"`+key+`"`, original)
-		// Also replace unquoted form in case it appears that way (e.g. URL templates)
 		execStr = strings.ReplaceAll(execStr, key, original)
 	}
 
 	concurrency := req.Concurrency
-	if concurrency == 0 {
+	if concurrency <= 0 {
 		concurrency = s.DefaultConcurrency
 	}
 	if concurrency <= 0 {
@@ -325,79 +509,48 @@ func (s *Server) ExecHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	iterations := req.Iterations
-	if iterations == 0 {
+	if iterations <= 0 {
 		iterations = s.DefaultIterations
 	}
 	if iterations <= 0 {
 		iterations = concurrency
 	}
 
-	// Validation
 	if concurrency > 1000 {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "concurrency exceeds maximum allowed (1000)"})
-		return
+		return "", 0, 0, nil, fmt.Errorf("concurrency exceeds maximum allowed (1000)")
 	}
 	if iterations > 10000000 {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "iterations exceed maximum allowed (10,000,000)"})
-		return
-	}
-	if iterations < concurrency && iterations > 0 {
-		// This is technically allowed but we might want to warn or just let it be.
-		// For now, let's just make sure it's at least 1 if concurrency is 1.
+		return "", 0, 0, nil, fmt.Errorf("iterations exceed maximum allowed (10,000,000)")
 	}
 
-	fmt.Printf("[%s] Executing: %s (Concurrency: %d, Iterations: %d)\n", time.Now().Format(time.RFC3339), execStr, concurrency, iterations)
+	return execStr, concurrency, iterations, placeholders, nil
+}
 
-	timeout, _ := time.ParseDuration(req.Timeout)
-	delay, _ := time.ParseDuration(req.Delay)
-	jitter, _ := time.ParseDuration(req.Jitter)
-	rampup, _ := time.ParseDuration(req.RampUp)
-
-	rateLimit := 0.0
-	if req.Rate != "" {
-		parts := strings.Split(req.Rate, "/")
-		val, err := strconv.ParseFloat(parts[0], 64)
-		if err == nil {
-			if len(parts) == 1 {
-				rateLimit = val
-			} else {
-				switch strings.ToLower(parts[1]) {
-				case "s", "sec", "second", "seconds":
-					rateLimit = val
-				case "m", "min", "minute", "minutes":
-					rateLimit = val / 60.0
-				case "h", "hr", "hour", "hours":
-					rateLimit = val / 3600.0
-				}
-			}
-		}
+func (s *Server) parseRateLimit(rate string) float64 {
+	if rate == "" {
+		return 0
 	}
+	parts := strings.Split(rate, "/")
+	val, err := strconv.ParseFloat(parts[0], 64)
+	if err != nil {
+		return 0
+	}
+	if len(parts) == 1 {
+		return val
+	}
+	switch strings.ToLower(parts[1]) {
+	case "s", "sec", "second", "seconds":
+		return val
+	case "m", "min", "minute", "minutes":
+		return val / 60.0
+	case "h", "hr", "hour", "hours":
+		return val / 3600.0
+	}
+	return 0
+}
 
-	s.ActiveJobs.Add(1)
-	defer s.ActiveJobs.Add(-1)
-
+func (s *Server) generateTasks(ctx context.Context, iterations int, execStr string, rateLimit float64, delay, jitter time.Duration) <-chan engine.Task {
 	tasks := make(chan engine.Task, iterations)
-	opts := engine.ExecOptions{
-		Silent:        false,
-		Verbose:       req.Verbose,
-		Report:        true,
-		TotalTasks:    iterations,
-		Context:       r.Context(),
-		Stdout:        &strings.Builder{}, // Capture but ignore for now as we want structured report
-		Stderr:        &strings.Builder{},
-		UserVars:      req.Vars,
-		Registry:      s.Registry,
-		TemplateState: engine.NewTemplateState(),
-		Timeout:       timeout,
-		Delay:         delay,
-		Jitter:        jitter,
-		RampUp:        rampup,
-		RateLimit:     rateLimit,
-	}
-
-	// Simple task generator for the server
 	go func() {
 		defer close(tasks)
 		var lastStart time.Time
@@ -435,7 +588,7 @@ func (s *Server) ExecHandler(w http.ResponseWriter, r *http.Request) {
 
 				if waitDuration > 0 {
 					select {
-					case <-r.Context().Done():
+					case <-ctx.Done():
 						return
 					case <-time.After(waitDuration):
 						now = time.Now()
@@ -445,48 +598,13 @@ func (s *Server) ExecHandler(w http.ResponseWriter, r *http.Request) {
 
 			lastStart = now
 			select {
-			case <-r.Context().Done():
+			case <-ctx.Done():
 				return
 			case tasks <- engine.Task{Index: i + 1, Command: execStr, Timestamp: time.Now()}:
 			}
 		}
 	}()
-
-	report, err := engine.RunJobPool(concurrency, tasks, opts)
-	if err != nil && report == nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: err.Error()})
-		return
-	}
-
-	// Response negotiation
-	accept := r.Header.Get("Accept")
-	useJSON := strings.Contains(accept, "application/json")
-	if !useJSON && strings.Contains(contentType, "application/json") {
-		// If they sent JSON, they probably want JSON back unless they explicitly asked for something else
-		useJSON = true
-	}
-	if accept == "*/*" || accept == "" {
-		// Default to text for curl/browsers unless they specifically asked for JSON or sent JSON
-		if !strings.Contains(contentType, "application/json") {
-			useJSON = false
-		}
-	}
-
-	if useJSON {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(ExecResponse{
-			Status: "ok",
-			Report: report,
-		})
-		return
-	}
-
-	// Default to plain text
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(s.formatReportText(report)))
+	return tasks
 }
 
 func (s *Server) resolveExec(exec interface{}) (string, error) {
