@@ -18,7 +18,7 @@ import (
 )
 
 func TestHealthCheck(t *testing.T) {
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "", "", "", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore())
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "", "", "", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
 	
 	t.Run("StatusStarting", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/health", nil)
@@ -97,7 +97,7 @@ func TestHealthCheck(t *testing.T) {
 func TestExecHandler(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
 	registry.Register(engine.NewSleepClient())
-	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 0, 0, 0, true, NewInMemoryJobStore())
+	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 0, 0, 0, true, NewInMemoryJobStore(), 24*time.Hour)
 	s.Status = StatusReady
 
 	t.Run("ValidRequest", func(t *testing.T) {
@@ -374,7 +374,7 @@ func TestExecHandler(t *testing.T) {
 
 func TestExecHandlerWithAuth(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "super-secret", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore())
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "super-secret", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
 	s.Status = StatusReady
 
 	validPayload := ExecRequest{
@@ -436,7 +436,7 @@ func TestExecHandlerWithAuth(t *testing.T) {
 
 func TestExecHandlerWithBasicAuth(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "admin:secret", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore())
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "admin:secret", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
 	s.Status = StatusReady
 
 	validPayload := ExecRequest{
@@ -506,7 +506,7 @@ func TestExecHandlerWithBasicAuth(t *testing.T) {
 
 func TestExecHandlerWithHmac(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "hmac-secret", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore())
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "hmac-secret", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
 	s.Status = StatusReady
 
 	validPayload := ExecRequest{
@@ -584,7 +584,7 @@ func TestStartTLS_MissingFiles(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "nonexistent.cert", "nonexistent.key", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore())
+	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "nonexistent.cert", "nonexistent.key", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
 	err := s.Start(ctx)
 
 	if err == nil {
@@ -598,7 +598,7 @@ func TestStartTLS_MissingFiles(t *testing.T) {
 func TestAsyncExecHandler(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
 	registry.Register(engine.NewSleepClient())
-	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore())
+	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
 	s.Status = StatusReady
 
 	t.Run("ValidAsyncRequest", func(t *testing.T) {
@@ -671,4 +671,143 @@ func TestAsyncExecHandler(t *testing.T) {
 			t.Errorf("expected 200 OK for idempotent retry, got %d", rr2.Code)
 		}
 	})
+}
+
+func TestJobLifecycle(t *testing.T) {
+	registry := engine.NewBuiltinRegistry()
+	registry.Register(engine.NewSleepClient())
+	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+	s.Status = StatusReady
+
+	t.Run("FullFlow_Completed", func(t *testing.T) {
+		payload := ExecRequest{
+			Exec:        "echo hello",
+			Concurrency: 1,
+			Iterations:  1,
+		}
+		body, _ := json.Marshal(payload)
+		req := httptest.NewRequest("POST", "/async/exec", bytes.NewBuffer(body))
+		rr := httptest.NewRecorder()
+		s.AsyncExecHandler(rr, req)
+
+		var resp map[string]string
+		json.Unmarshal(rr.Body.Bytes(), &resp)
+		jobID := resp["job_id"]
+
+		// Polling for completion
+		for i := 0; i < 20; i++ {
+			reqGet := httptest.NewRequest("GET", "/jobs/"+jobID, nil)
+			rrGet := httptest.NewRecorder()
+			s.JobsHandler(rrGet, reqGet)
+			
+			var job Job
+			json.Unmarshal(rrGet.Body.Bytes(), &job)
+			if job.Status == JobStatusCompleted {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+
+		reqFinal := httptest.NewRequest("GET", "/jobs/"+jobID, nil)
+		rrFinal := httptest.NewRecorder()
+		s.JobsHandler(rrFinal, reqFinal)
+		
+		var finalJob Job
+		json.Unmarshal(rrFinal.Body.Bytes(), &finalJob)
+		if finalJob.Status != JobStatusCompleted {
+			t.Errorf("expected status completed, got %s", finalJob.Status)
+		}
+		if finalJob.Report == nil {
+			t.Error("expected report to be populated")
+		}
+	})
+
+	t.Run("Cancellation", func(t *testing.T) {
+		payload := ExecRequest{
+			Exec:        ".sleep 1s",
+			Concurrency: 1,
+			Iterations:  1,
+		}
+		body, _ := json.Marshal(payload)
+		req := httptest.NewRequest("POST", "/async/exec", bytes.NewBuffer(body))
+		rr := httptest.NewRecorder()
+		s.AsyncExecHandler(rr, req)
+
+		var resp map[string]string
+		json.Unmarshal(rr.Body.Bytes(), &resp)
+		jobID := resp["job_id"]
+
+		// Wait a bit for it to start
+		time.Sleep(50 * time.Millisecond)
+
+		// Cancel
+		reqDel := httptest.NewRequest("DELETE", "/jobs/"+jobID, nil)
+		rrDel := httptest.NewRecorder()
+		s.JobsHandler(rrDel, reqDel)
+
+		if rrDel.Code != http.StatusAccepted {
+			t.Errorf("expected 202 Accepted, got %d", rrDel.Code)
+		}
+
+		// Verify status is cancelled
+		reqGet := httptest.NewRequest("GET", "/jobs/"+jobID, nil)
+		rrGet := httptest.NewRecorder()
+		s.JobsHandler(rrGet, reqGet)
+		
+		var job Job
+		json.Unmarshal(rrGet.Body.Bytes(), &job)
+		if job.Status != JobStatusCancelled {
+			t.Errorf("expected status cancelled, got %s", job.Status)
+		}
+	})
+}
+
+func TestJobCleanup(t *testing.T) {
+	store := NewInMemoryJobStore()
+	now := time.Now()
+	
+	// Completed job, 2 hours old
+	completedAt := now.Add(-2 * time.Hour)
+	job1 := &Job{
+		ID:          "job1",
+		Status:      JobStatusCompleted,
+		CreatedAt:   now.Add(-3 * time.Hour),
+		CompletedAt: &completedAt,
+	}
+	
+	// Completed job, 30 mins old
+	completedAt2 := now.Add(-30 * time.Minute)
+	job2 := &Job{
+		ID:          "job2",
+		Status:      JobStatusCompleted,
+		CreatedAt:   now.Add(-1 * time.Hour),
+		CompletedAt: &completedAt2,
+	}
+	
+	// Running job, 2 hours old (should NOT be cleaned up)
+	job3 := &Job{
+		ID:        "job3",
+		Status:    JobStatusRunning,
+		CreatedAt: now.Add(-2 * time.Hour),
+	}
+	
+	store.Create(job1)
+	store.Create(job2)
+	store.Create(job3)
+	
+	// Cleanup jobs older than 1 hour
+	count, _ := store.Cleanup(1 * time.Hour)
+	if count != 1 {
+		t.Errorf("expected 1 job cleaned up, got %d", count)
+	}
+	
+	if _, ok := store.Get("job1"); ok {
+		t.Error("job1 should have been cleaned up")
+	}
+	if _, ok := store.Get("job2"); !ok {
+		t.Error("job2 should NOT have been cleaned up")
+	}
+	if _, ok := store.Get("job3"); !ok {
+		t.Error("job3 should NOT have been cleaned up")
+	}
 }

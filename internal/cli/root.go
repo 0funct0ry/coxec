@@ -131,6 +131,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 		v.BindPFlag("server.default-iterations", cmd.Flags().Lookup("iterations"))
 		v.BindPFlag("server.max-concurrent-jobs", cmd.Flags().Lookup("max-concurrent-jobs"))
 		v.BindPFlag("server.enable-sync", cmd.Flags().Lookup("enable-sync"))
+		v.BindPFlag("server.job-ttl", cmd.Flags().Lookup("job-ttl"))
 
 		loadedConfig, err := config.LoadConfig(v, configPath)
 		if err != nil {
@@ -148,6 +149,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 		iterations := v.GetInt("server.default-iterations")
 		maxConcurrentJobs := v.GetInt("server.max-concurrent-jobs")
 		enableSync := v.GetBool("server.enable-sync")
+		jobTTL := v.GetDuration("server.job-ttl")
 
 		// These flags are still needed for CLI mode or if they are not bound to viper yet
 		executeCmd, _ := cmd.Flags().GetString("execute")
@@ -236,7 +238,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 			if loadedConfig != "" {
 				fmt.Fprintf(os.Stderr, "Config loaded from: %s\n", loadedConfig)
 			}
-			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations, maxConcurrentJobs, enableSync, server.NewInMemoryJobStore())
+			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations, maxConcurrentJobs, enableSync, server.NewInMemoryJobStore(), jobTTL)
 			return s.Start(ctx)
 		}
 
@@ -456,6 +458,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 	cmd.Flags().String("config", "", "Path to configuration file")
 	cmd.Flags().Int("max-concurrent-jobs", 0, "Maximum number of concurrent jobs (requests) allowed globally")
 	cmd.Flags().Bool("enable-sync", true, "Enable synchronous execution mode")
+	cmd.Flags().Duration("job-ttl", 24*time.Hour, "How long to keep completed/failed/cancelled jobs in memory")
 
 	// Register built-in client subcommands for help and discovery
 	registry := getBuiltinRegistry()

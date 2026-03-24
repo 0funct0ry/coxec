@@ -218,6 +218,20 @@ curl -i -X POST http://localhost:8080/async/exec \
 
 The `Idempotency-Key` header is supported to prevent duplicate job submissions. If a job with the same key already exists, the server returns the existing `job_id` with a `200 OK` status.
 
+#### Job Management
+Monitor and control asynchronous jobs using the `/jobs` endpoint:
+
+- **Check Status**: `GET /jobs/:id`
+  Returns the current state (`queued`, `running`, `completed`, `failed`, `cancelled`) and the final execution report once finished.
+  
+- **Cancel Job**: `DELETE /jobs/:id`
+  Gracefully stops a running job. The status will transition to `cancelled`.
+
+- **Automatic Cleanup**: Finished jobs are automatically removed from memory after a configurable period (default: `24h`). You can adjust this using the `--job-ttl` flag:
+  ```bash
+  coxec --server --job-ttl 1h
+  ```
+
 #### Supported Fields
 - `exec`: (Required) The command string to execute.
 - `concurrency`: (Optional) Maximum number of concurrent executions. Overrides the value set at server startup (Max: 1,000).
@@ -262,6 +276,7 @@ The endpoint returns `400 Bad Request` for invalid payloads (e.g. non-positive v
 - `--config string`: Path to configuration file (e.g., `coxec.yaml`).
 - `--max-concurrent-jobs int`: Maximum number of concurrent jobs (requests) allowed globally.
 - `--enable-sync bool`: Enable synchronous execution mode (default: `true`).
+- `--job-ttl duration`: Time to retain finished jobs in memory (default: `24h`).
 - `-c, --concurrency int`: Number of concurrent workers. (default: `1`)
 - `-n, --iterations int`: Total number of executions (defaults to `--concurrency`).
 - `--rate string`: Maximum execution rate (e.g., `50/s`, `10/m`, `1/h`).

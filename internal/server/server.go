@@ -51,6 +51,8 @@ type Server struct {
 	MaxConcurrentJobs  int
 	EnableSync         bool
 	JobStore           JobStore
+	JobTTL             time.Duration
+	jobCancels         map[string]context.CancelFunc
 }
 
 // ExecRequest defines the payload for POST /exec
@@ -75,7 +77,7 @@ type ExecResponse struct {
 }
 
 // NewServer creates a new Server instance.
-func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry, defaultConcurrency, defaultIterations int, maxConcurrentJobs int, enableSync bool, jobStore JobStore) *Server {
+func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry, defaultConcurrency, defaultIterations int, maxConcurrentJobs int, enableSync bool, jobStore JobStore, jobTTL time.Duration) *Server {
 	return &Server{
 		Addr:               addr,
 		Port:               port,
@@ -93,6 +95,8 @@ func NewServer(addr string, port int, version string, authToken string, authBasi
 		MaxConcurrentJobs:  maxConcurrentJobs,
 		EnableSync:         enableSync,
 		JobStore:           jobStore,
+		JobTTL:             jobTTL,
+		jobCancels:         make(map[string]context.CancelFunc),
 	}
 }
 
@@ -103,6 +107,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/health", s.HealthHandler)
 	mux.HandleFunc("/exec", s.ExecHandler)
 	mux.HandleFunc("/async/exec", s.AsyncExecHandler)
+	mux.HandleFunc("/jobs/", s.JobsHandler) // Handles GET /jobs/:id and DELETE /jobs/:id
 
 	srv := &http.Server{
 		Addr:    fullAddr,
@@ -128,6 +133,23 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 		if err != nil && err != http.ErrServerClosed {
 			errChan <- err
+		}
+	}()
+
+	// Start background cleanup
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				count, _ := s.JobStore.Cleanup(s.JobTTL)
+				if count > 0 {
+					fmt.Printf("[%s] Cleaned up %d expired jobs\n", time.Now().Format(time.RFC3339), count)
+				}
+			}
 		}
 	}()
 
@@ -342,11 +364,6 @@ func (s *Server) AsyncExecHandler(w http.ResponseWriter, r *http.Request) {
 		s.ActiveJobs.Add(1)
 		defer s.ActiveJobs.Add(-1)
 
-		now := time.Now()
-		job.StartedAt = &now
-		job.Status = JobStatusRunning
-		_ = s.JobStore.Update(job)
-
 		timeout, _ := time.ParseDuration(req.Timeout)
 		delay, _ := time.ParseDuration(req.Delay)
 		jitter, _ := time.ParseDuration(req.Jitter)
@@ -354,12 +371,26 @@ func (s *Server) AsyncExecHandler(w http.ResponseWriter, r *http.Request) {
 		rateLimit := s.parseRateLimit(req.Rate)
 
 		// Create a background context with the same timeout as the request if provided
-		ctx := context.Background()
+		ctx, cancel := context.WithCancel(context.Background())
 		if timeout > 0 {
-			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, timeout)
-			defer cancel()
 		}
+		defer cancel()
+
+		s.mu.Lock()
+		s.jobCancels[jobID] = cancel
+		s.mu.Unlock()
+
+		defer func() {
+			s.mu.Lock()
+			delete(s.jobCancels, jobID)
+			s.mu.Unlock()
+		}()
+
+		now := time.Now()
+		job.StartedAt = &now
+		job.Status = JobStatusRunning
+		_ = s.JobStore.Update(job)
 
 		opts := engine.ExecOptions{
 			Silent:        true,
@@ -384,7 +415,10 @@ func (s *Server) AsyncExecHandler(w http.ResponseWriter, r *http.Request) {
 
 		doneAt := time.Now()
 		job.CompletedAt = &doneAt
-		if err != nil {
+		
+		if ctx.Err() == context.Canceled {
+			job.Status = JobStatusCancelled
+		} else if err != nil {
 			job.Status = JobStatusFailed
 			job.Error = err.Error()
 		} else {
@@ -400,6 +434,58 @@ func (s *Server) AsyncExecHandler(w http.ResponseWriter, r *http.Request) {
 		"job_id": jobID,
 		"status": "queued",
 	})
+}
+
+func (s *Server) JobsHandler(w http.ResponseWriter, r *http.Request) {
+	// Extract job ID from /jobs/:id
+	id := strings.TrimPrefix(r.URL.Path, "/jobs/")
+	if id == "" {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		job, ok := s.JobStore.Get(id)
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "job not found"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(job)
+
+	case http.MethodDelete:
+		job, ok := s.JobStore.Get(id)
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "job not found"})
+			return
+		}
+
+		s.mu.Lock()
+		cancel, running := s.jobCancels[id]
+		s.mu.Unlock()
+
+		if running {
+			cancel()
+			// Update status immediately for better UX, though the background goroutine will also do it
+			job.Status = JobStatusCancelled
+			now := time.Now()
+			job.CompletedAt = &now
+			_ = s.JobStore.Update(job)
+			w.WriteHeader(http.StatusAccepted)
+		} else {
+			// If not running, we might still want to "cancel" a queued job if we had a queue,
+			// but here queued/running transition is almost instant.
+			// Just return 200 OK if it's already finished.
+			w.WriteHeader(http.StatusOK)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": string(job.Status)})
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 type errorResponse struct {
