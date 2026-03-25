@@ -1443,3 +1443,112 @@ func TestGetJobByID(t *testing.T) {
 		}
 	})
 }
+
+func TestJobCancellation(t *testing.T) {
+	newServer := func(authToken string) *Server {
+		s := NewServer("127.0.0.1", 0, "1.0.0", authToken, "", "", "", "", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+		s.Status = StatusReady
+		return s
+	}
+
+	makeDelReq := func(id string) *http.Request {
+		return httptest.NewRequest(http.MethodDelete, "/jobs/"+id, nil)
+	}
+
+	t.Run("AuthRequired", func(t *testing.T) {
+		s := newServer("secret")
+		rr := httptest.NewRecorder()
+		s.JobsHandler(rr, makeDelReq("any-id"))
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401, got %d", rr.Code)
+		}
+	})
+
+	t.Run("NotFound", func(t *testing.T) {
+		s := newServer("")
+		rr := httptest.NewRecorder()
+		s.JobsHandler(rr, makeDelReq("nonexistent"))
+		if rr.Code != http.StatusNotFound {
+			t.Errorf("expected 404, got %d", rr.Code)
+		}
+	})
+
+	t.Run("Conflict_TerminalState", func(t *testing.T) {
+		s := newServer("")
+		terminalStates := []JobStatus{JobStatusCompleted, JobStatusFailed, JobStatusCancelled}
+		for _, state := range terminalStates {
+			t.Run(string(state), func(t *testing.T) {
+				j := &Job{ID: "term-" + string(state), Status: state, Request: ExecRequest{Exec: "echo"}}
+				_ = s.JobStore.Create(j)
+				rr := httptest.NewRecorder()
+				s.JobsHandler(rr, makeDelReq(j.ID))
+				if rr.Code != http.StatusConflict {
+					t.Errorf("expected 409 for state %s, got %d", state, rr.Code)
+				}
+			})
+		}
+	})
+
+	t.Run("CancelQueued", func(t *testing.T) {
+		s := newServer("")
+		j := &Job{ID: "queued-job", Status: JobStatusQueued, Request: ExecRequest{Exec: "echo"}}
+		_ = s.JobStore.Create(j)
+		
+		rr := httptest.NewRecorder()
+		s.JobsHandler(rr, makeDelReq(j.ID))
+		
+		if rr.Code != http.StatusAccepted {
+			t.Errorf("expected 202, got %d", rr.Code)
+		}
+		
+		job, _ := s.JobStore.Get(j.ID)
+		if job.Status != JobStatusCancelled {
+			t.Errorf("expected cancelled status, got %s", job.Status)
+		}
+		if job.CompletedAt == nil {
+			t.Error("expected CompletedAt to be set")
+		}
+	})
+
+    t.Run("CancelRunning", func(t *testing.T) {
+        registry := engine.NewBuiltinRegistry()
+        registry.Register(engine.NewSleepClient())
+        s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+        s.Status = StatusReady
+
+        payload := ExecRequest{
+            Exec:        ".sleep 1s",
+            Concurrency: 1,
+            Iterations:  1,
+        }
+        body, _ := json.Marshal(payload)
+        req := httptest.NewRequest("POST", "/async/exec", bytes.NewBuffer(body))
+        rr := httptest.NewRecorder()
+        s.AsyncExecHandler(rr, req)
+
+        var resp map[string]string
+        json.Unmarshal(rr.Body.Bytes(), &resp)
+        jobID := resp["job_id"]
+
+        // Wait for it to start
+        time.Sleep(100 * time.Millisecond)
+
+        // Cancel
+        reqDel := httptest.NewRequest("DELETE", "/jobs/"+jobID, nil)
+        rrDel := httptest.NewRecorder()
+        s.JobsHandler(rrDel, reqDel)
+
+        if rrDel.Code != http.StatusAccepted {
+            t.Errorf("expected 202 Accepted, got %d", rrDel.Code)
+        }
+
+        // Verify status is cancelled
+        job, _ := s.JobStore.Get(jobID)
+        if job.Status != JobStatusCancelled {
+            t.Errorf("expected status cancelled, got %s", job.Status)
+        }
+        if job.CompletedAt == nil {
+            t.Error("expected CompletedAt to be set")
+        }
+    })
+}

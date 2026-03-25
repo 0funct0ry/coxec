@@ -285,7 +285,12 @@ Monitor and control asynchronous jobs using the `/jobs` endpoint:
   ```
   
 - **Cancel Job**: `DELETE /jobs/:id`
-  Gracefully stops a running job. The status will transition to `cancelled`.
+  Gracefully stops a running or queued job.
+  - Returns `202 Accepted` if cancellation is initiated.
+  - Returns `409 Conflict` if the job is already in a terminal state (`completed`, `failed`, or `cancelled`).
+  - Returns `404 Not Found` if the job does not exist or has expired.
+  
+  In-progress executions are notified of cancellation via context propagation, allowing them to stop gracefully.
 
 - **Automatic Cleanup**: Finished jobs are automatically removed from memory after a configurable period (default: `24h`). You can adjust this using the `--job-ttl` flag:
   ```bash

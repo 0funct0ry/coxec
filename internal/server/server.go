@@ -498,10 +498,23 @@ func (s *Server) JobsHandler(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(jobToDetail(job))
 
 	case http.MethodDelete:
+		if authErr := s.checkAuth(w, r, nil); authErr != nil {
+			w.WriteHeader(authErr.code)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": authErr.err})
+			return
+		}
+
 		job, ok := s.JobStore.Get(id)
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "job not found"})
+			return
+		}
+
+		// Conflict if job is already terminal
+		if job.Status == JobStatusCompleted || job.Status == JobStatusFailed || job.Status == JobStatusCancelled {
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("cannot cancel job in terminal state: %s", job.Status)})
 			return
 		}
 
@@ -517,10 +530,15 @@ func (s *Server) JobsHandler(w http.ResponseWriter, r *http.Request) {
 			job.CompletedAt = &now
 			_ = s.JobStore.Update(job)
 			w.WriteHeader(http.StatusAccepted)
+		} else if job.Status == JobStatusQueued {
+			// Job is queued but not yet in jobCancels (about to start)
+			job.Status = JobStatusCancelled
+			now := time.Now()
+			job.CompletedAt = &now
+			_ = s.JobStore.Update(job)
+			w.WriteHeader(http.StatusAccepted)
 		} else {
-			// If not running, we might still want to "cancel" a queued job if we had a queue,
-			// but here queued/running transition is almost instant.
-			// Just return 200 OK if it's already finished.
+			// Fallback for any other state
 			w.WriteHeader(http.StatusOK)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": string(job.Status)})
