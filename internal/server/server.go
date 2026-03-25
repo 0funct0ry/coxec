@@ -67,6 +67,7 @@ type ExecRequest struct {
 	Jitter      string            `json:"jitter,omitempty"`
 	RampUp      string            `json:"rampup,omitempty"`
 	Verbose     bool              `json:"verbose,omitempty"`
+	Label       string            `json:"label,omitempty"`
 }
 
 // ExecResponse defines the response for POST /exec
@@ -82,6 +83,32 @@ type ListJobsResponse struct {
 	Total  int           `json:"total"`
 	Limit  int           `json:"limit"`
 	Offset int           `json:"offset"`
+}
+
+// JobSummaryStats holds aggregate statistics for a terminal job.
+type JobSummaryStats struct {
+	SuccessCount   int            `json:"success_count"`
+	FailCount      int            `json:"fail_count"`
+	TotalDuration  string         `json:"total_duration"`
+	AverageLatency string         `json:"average_latency"`
+	HTTPErrors     map[string]int `json:"http_errors,omitempty"`
+	TCPErrors      map[string]int `json:"tcp_errors,omitempty"`
+	TemplateErrors map[string]int `json:"template_errors,omitempty"`
+}
+
+// JobDetailResponse is the response body for GET /jobs/:id.
+type JobDetailResponse struct {
+	JobID               string           `json:"job_id"`
+	State               JobStatus        `json:"state"`
+	SubmittedAt         time.Time        `json:"submitted_at"`
+	StartedAt           *time.Time       `json:"started_at,omitempty"`
+	Duration            string           `json:"duration,omitempty"`
+	Concurrency         int              `json:"concurrency"`
+	IterationsRequested int              `json:"iterations_requested"`
+	IterationsCompleted int              `json:"iterations_completed"`
+	Label               string           `json:"label,omitempty"`
+	Summary             *JobSummaryStats `json:"summary,omitempty"`
+	Error               string           `json:"error,omitempty"`
 }
 
 // NewServer creates a new Server instance.
@@ -455,14 +482,20 @@ func (s *Server) JobsHandler(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
+		if authErr := s.checkAuth(w, r, nil); authErr != nil {
+			w.WriteHeader(authErr.code)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": authErr.err})
+			return
+		}
 		job, ok := s.JobStore.Get(id)
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "job not found"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "job not found or expired"})
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(job)
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(jobToDetail(job))
 
 	case http.MethodDelete:
 		job, ok := s.JobStore.Get(id)
@@ -495,6 +528,45 @@ func (s *Server) JobsHandler(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+// jobToDetail converts a Job into the rich JobDetailResponse for GET /jobs/:id.
+func jobToDetail(job *Job) *JobDetailResponse {
+	resp := &JobDetailResponse{
+		JobID:               job.ID,
+		State:               job.Status,
+		SubmittedAt:         job.CreatedAt,
+		StartedAt:           job.StartedAt,
+		Concurrency:         job.Request.Concurrency,
+		IterationsRequested: job.Request.Iterations,
+		Label:               job.Request.Label,
+		Error:               job.Error,
+	}
+
+	// Compute wall-clock duration for finished jobs.
+	if job.StartedAt != nil && job.CompletedAt != nil {
+		resp.Duration = job.CompletedAt.Sub(*job.StartedAt).String()
+	}
+
+	// Pull iteration count and summary stats from the execution report.
+	if job.Report != nil {
+		resp.IterationsCompleted = job.Report.TotalExecutions
+
+		// Attach summary for terminal states.
+		if job.Status == JobStatusCompleted || job.Status == JobStatusFailed || job.Status == JobStatusCancelled {
+			resp.Summary = &JobSummaryStats{
+				SuccessCount:   job.Report.SuccessCount,
+				FailCount:      job.Report.FailCount,
+				TotalDuration:  job.Report.TotalDuration,
+				AverageLatency: job.Report.AverageLatency,
+				HTTPErrors:     job.Report.HTTPErrors,
+				TCPErrors:      job.Report.TCPErrors,
+				TemplateErrors: job.Report.TemplateErrors,
+			}
+		}
+	}
+
+	return resp
 }
 
 type errorResponse struct {

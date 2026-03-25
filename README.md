@@ -257,7 +257,32 @@ Monitor and control asynchronous jobs using the `/jobs` endpoint:
   | `offset`    | `0`     | —     | Number of jobs to skip        |
 
 - **Check Status**: `GET /jobs/:id`
-  Returns the current state (`queued`, `running`, `completed`, `failed`, `cancelled`) and the final execution report once finished.
+  Returns the current state (`queued`, `running`, `completed`, `failed`, `cancelled`), timing metadata, and a summary of execution results once finished.
+
+  ```bash
+  curl -s http://localhost:8080/jobs/550e8400-e29b-41d4-a716-446655440000 | jq .
+  ```
+
+  **Response:**
+  ```json
+  {
+    "job_id": "550e8400-e29b-41d4-a716-446655440000",
+    "state": "completed",
+    "submitted_at": "2026-03-25T08:00:00Z",
+    "started_at": "2026-03-25T08:00:00Z",
+    "duration": "10.05s",
+    "concurrency": 10,
+    "iterations_requested": 100,
+    "iterations_completed": 100,
+    "label": "nightly-cleanup",
+    "summary": {
+      "success_count": 100,
+      "fail_count": 0,
+      "total_duration": "10.05s",
+      "average_latency": "100ms"
+    }
+  }
+  ```
   
 - **Cancel Job**: `DELETE /jobs/:id`
   Gracefully stops a running job. The status will transition to `cancelled`.
@@ -279,6 +304,7 @@ Monitor and control asynchronous jobs using the `/jobs` endpoint:
 - `jitter`: (Optional) Random jitter added to delay.
 - `rampup`: (Optional) Duration to linearly increase concurrency.
 - `verbose`: (Optional) If true, returns detailed per-execution results in the `details` field.
+- `label`: (Optional) A descriptive name for the job, returned in status responses.
 
 The endpoint returns `400 Bad Request` for invalid payloads (e.g. non-positive values, or exceeding maximum bounds) and `500 Internal Server Error` if execution fails catastrophically.
 

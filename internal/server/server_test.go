@@ -699,10 +699,10 @@ func TestJobLifecycle(t *testing.T) {
 			reqGet := httptest.NewRequest("GET", "/jobs/"+jobID, nil)
 			rrGet := httptest.NewRecorder()
 			s.JobsHandler(rrGet, reqGet)
-			
-			var job Job
-			json.Unmarshal(rrGet.Body.Bytes(), &job)
-			if job.Status == JobStatusCompleted {
+
+			var detail JobDetailResponse
+			json.Unmarshal(rrGet.Body.Bytes(), &detail)
+			if detail.State == JobStatusCompleted {
 				break
 			}
 			time.Sleep(50 * time.Millisecond)
@@ -711,14 +711,14 @@ func TestJobLifecycle(t *testing.T) {
 		reqFinal := httptest.NewRequest("GET", "/jobs/"+jobID, nil)
 		rrFinal := httptest.NewRecorder()
 		s.JobsHandler(rrFinal, reqFinal)
-		
-		var finalJob Job
-		json.Unmarshal(rrFinal.Body.Bytes(), &finalJob)
-		if finalJob.Status != JobStatusCompleted {
-			t.Errorf("expected status completed, got %s", finalJob.Status)
+
+		var finalDetail JobDetailResponse
+		json.Unmarshal(rrFinal.Body.Bytes(), &finalDetail)
+		if finalDetail.State != JobStatusCompleted {
+			t.Errorf("expected status completed, got %s", finalDetail.State)
 		}
-		if finalJob.Report == nil {
-			t.Error("expected report to be populated")
+		if finalDetail.Summary == nil {
+			t.Error("expected summary to be populated for completed job")
 		}
 	})
 
@@ -753,11 +753,11 @@ func TestJobLifecycle(t *testing.T) {
 		reqGet := httptest.NewRequest("GET", "/jobs/"+jobID, nil)
 		rrGet := httptest.NewRecorder()
 		s.JobsHandler(rrGet, reqGet)
-		
-		var job Job
-		json.Unmarshal(rrGet.Body.Bytes(), &job)
-		if job.Status != JobStatusCancelled {
-			t.Errorf("expected status cancelled, got %s", job.Status)
+
+		var detail JobDetailResponse
+		json.Unmarshal(rrGet.Body.Bytes(), &detail)
+		if detail.State != JobStatusCancelled {
+			t.Errorf("expected status cancelled, got %s", detail.State)
 		}
 	})
 }
@@ -1110,6 +1110,336 @@ func TestListJobsHandler(t *testing.T) {
 		}
 		if resp.Offset != 0 {
 			t.Errorf("expected default offset=0 for invalid param, got %d", resp.Offset)
+		}
+	})
+}
+
+func TestGetJobByID(t *testing.T) {
+	newServer := func(authToken string) *Server {
+		s := NewServer("127.0.0.1", 0, "1.0.0", authToken, "", "", "", "", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+		s.Status = StatusReady
+		return s
+	}
+
+	makeGetReq := func(id string) *http.Request {
+		return httptest.NewRequest(http.MethodGet, "/jobs/"+id, nil)
+	}
+
+	t.Run("JobNotFound", func(t *testing.T) {
+		s := newServer("")
+		rr := httptest.NewRecorder()
+		s.JobsHandler(rr, makeGetReq("nonexistent-id"))
+
+		if rr.Code != http.StatusNotFound {
+			t.Errorf("expected 404, got %d", rr.Code)
+		}
+		var resp map[string]string
+		_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+		if resp["error"] != "job not found or expired" {
+			t.Errorf("expected 'job not found or expired', got %q", resp["error"])
+		}
+	})
+
+	t.Run("JobQueued", func(t *testing.T) {
+		s := newServer("")
+		now := time.Now()
+		j := &Job{
+			ID:        "queued-job",
+			Status:    JobStatusQueued,
+			Request:   ExecRequest{Exec: "echo hello", Concurrency: 3, Iterations: 10},
+			CreatedAt: now,
+		}
+		_ = s.JobStore.Create(j)
+
+		rr := httptest.NewRecorder()
+		s.JobsHandler(rr, makeGetReq("queued-job"))
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rr.Code)
+		}
+		var resp JobDetailResponse
+		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if resp.JobID != "queued-job" {
+			t.Errorf("expected job_id=queued-job, got %s", resp.JobID)
+		}
+		if resp.State != JobStatusQueued {
+			t.Errorf("expected state=queued, got %s", resp.State)
+		}
+		if resp.Concurrency != 3 {
+			t.Errorf("expected concurrency=3, got %d", resp.Concurrency)
+		}
+		if resp.IterationsRequested != 10 {
+			t.Errorf("expected iterations_requested=10, got %d", resp.IterationsRequested)
+		}
+		if resp.StartedAt != nil {
+			t.Error("expected started_at to be nil for queued job")
+		}
+		if resp.Duration != "" {
+			t.Errorf("expected no duration for queued job, got %q", resp.Duration)
+		}
+		if resp.Summary != nil {
+			t.Error("expected no summary for queued job")
+		}
+	})
+
+	t.Run("JobRunning", func(t *testing.T) {
+		s := newServer("")
+		now := time.Now()
+		startedAt := now.Add(-5 * time.Second)
+		j := &Job{
+			ID:        "running-job",
+			Status:    JobStatusRunning,
+			Request:   ExecRequest{Exec: "echo hello", Concurrency: 2, Iterations: 100},
+			CreatedAt: now.Add(-10 * time.Second),
+			StartedAt: &startedAt,
+		}
+		_ = s.JobStore.Create(j)
+
+		rr := httptest.NewRecorder()
+		s.JobsHandler(rr, makeGetReq("running-job"))
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rr.Code)
+		}
+		var resp JobDetailResponse
+		_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+
+		if resp.State != JobStatusRunning {
+			t.Errorf("expected state=running, got %s", resp.State)
+		}
+		if resp.StartedAt == nil {
+			t.Error("expected started_at to be set for running job")
+		}
+		// No CompletedAt → no duration
+		if resp.Duration != "" {
+			t.Errorf("expected no duration for running job, got %q", resp.Duration)
+		}
+		if resp.Summary != nil {
+			t.Error("expected no summary for still-running job")
+		}
+	})
+
+	t.Run("JobCompleted_WithSummaryAndDuration", func(t *testing.T) {
+		s := newServer("")
+		now := time.Now()
+		startedAt := now.Add(-30 * time.Second)
+		completedAt := now.Add(-1 * time.Second)
+		report := &engine.ExecutionReport{
+			TotalExecutions: 5,
+			SuccessCount:    4,
+			FailCount:       1,
+			TotalDuration:   "29s",
+			AverageLatency:  "5.8s",
+		}
+		j := &Job{
+			ID:          "completed-job",
+			Status:      JobStatusCompleted,
+			Request:     ExecRequest{Exec: "echo hi", Concurrency: 1, Iterations: 5, Label: "my-batch"},
+			CreatedAt:   now.Add(-35 * time.Second),
+			StartedAt:   &startedAt,
+			CompletedAt: &completedAt,
+			Report:      report,
+		}
+		_ = s.JobStore.Create(j)
+
+		rr := httptest.NewRecorder()
+		s.JobsHandler(rr, makeGetReq("completed-job"))
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rr.Code)
+		}
+		var resp JobDetailResponse
+		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if resp.State != JobStatusCompleted {
+			t.Errorf("expected state=completed, got %s", resp.State)
+		}
+		if resp.Duration == "" {
+			t.Error("expected duration to be set for completed job")
+		}
+		if resp.Label != "my-batch" {
+			t.Errorf("expected label=my-batch, got %q", resp.Label)
+		}
+		if resp.IterationsCompleted != 5 {
+			t.Errorf("expected iterations_completed=5, got %d", resp.IterationsCompleted)
+		}
+		if resp.Summary == nil {
+			t.Fatal("expected summary to be set for completed job")
+		}
+		if resp.Summary.SuccessCount != 4 {
+			t.Errorf("expected summary.success_count=4, got %d", resp.Summary.SuccessCount)
+		}
+		if resp.Summary.FailCount != 1 {
+			t.Errorf("expected summary.fail_count=1, got %d", resp.Summary.FailCount)
+		}
+		if resp.Summary.TotalDuration != "29s" {
+			t.Errorf("expected summary.total_duration=29s, got %q", resp.Summary.TotalDuration)
+		}
+	})
+
+	t.Run("JobFailed_WithErrorAndSummary", func(t *testing.T) {
+		s := newServer("")
+		now := time.Now()
+		startedAt := now.Add(-10 * time.Second)
+		completedAt := now.Add(-2 * time.Second)
+		report := &engine.ExecutionReport{
+			TotalExecutions: 3,
+			SuccessCount:    1,
+			FailCount:       2,
+		}
+		j := &Job{
+			ID:          "failed-job",
+			Status:      JobStatusFailed,
+			Request:     ExecRequest{Exec: "badcmd", Concurrency: 1, Iterations: 3},
+			CreatedAt:   now.Add(-15 * time.Second),
+			StartedAt:   &startedAt,
+			CompletedAt: &completedAt,
+			Report:      report,
+			Error:       "exit status 1",
+		}
+		_ = s.JobStore.Create(j)
+
+		rr := httptest.NewRecorder()
+		s.JobsHandler(rr, makeGetReq("failed-job"))
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rr.Code)
+		}
+		var resp JobDetailResponse
+		_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+
+		if resp.State != JobStatusFailed {
+			t.Errorf("expected state=failed, got %s", resp.State)
+		}
+		if resp.Error != "exit status 1" {
+			t.Errorf("expected error='exit status 1', got %q", resp.Error)
+		}
+		if resp.Summary == nil {
+			t.Fatal("expected summary for failed job")
+		}
+		if resp.Summary.FailCount != 2 {
+			t.Errorf("expected summary.fail_count=2, got %d", resp.Summary.FailCount)
+		}
+	})
+
+	t.Run("JobCancelled_WithSummary", func(t *testing.T) {
+		s := newServer("")
+		now := time.Now()
+		startedAt := now.Add(-5 * time.Second)
+		completedAt := now.Add(-1 * time.Second)
+		report := &engine.ExecutionReport{
+			TotalExecutions: 2,
+			SuccessCount:    2,
+			FailCount:       0,
+		}
+		j := &Job{
+			ID:          "cancelled-job",
+			Status:      JobStatusCancelled,
+			Request:     ExecRequest{Exec: "echo hi", Concurrency: 1, Iterations: 10},
+			CreatedAt:   now.Add(-8 * time.Second),
+			StartedAt:   &startedAt,
+			CompletedAt: &completedAt,
+			Report:      report,
+		}
+		_ = s.JobStore.Create(j)
+
+		rr := httptest.NewRecorder()
+		s.JobsHandler(rr, makeGetReq("cancelled-job"))
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rr.Code)
+		}
+		var resp JobDetailResponse
+		_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+
+		if resp.State != JobStatusCancelled {
+			t.Errorf("expected state=cancelled, got %s", resp.State)
+		}
+		if resp.Duration == "" {
+			t.Error("expected duration to be set for cancelled job (has both started_at and completed_at)")
+		}
+		if resp.Summary == nil {
+			t.Fatal("expected summary for cancelled job")
+		}
+		if resp.Summary.SuccessCount != 2 {
+			t.Errorf("expected summary.success_count=2, got %d", resp.Summary.SuccessCount)
+		}
+	})
+
+	t.Run("MethodNotAllowed", func(t *testing.T) {
+		s := newServer("")
+		for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch} {
+			rr := httptest.NewRecorder()
+			req := httptest.NewRequest(method, "/jobs/some-id", nil)
+			s.JobsHandler(rr, req)
+			if rr.Code != http.StatusMethodNotAllowed {
+				t.Errorf("method %s: expected 405, got %d", method, rr.Code)
+			}
+		}
+	})
+
+	t.Run("AuthEnforced", func(t *testing.T) {
+		s := newServer("secret-token")
+
+		j := &Job{
+			ID:        "auth-test-job",
+			Status:    JobStatusQueued,
+			Request:   ExecRequest{Exec: "echo hi"},
+			CreatedAt: time.Now(),
+		}
+		_ = s.JobStore.Create(j)
+
+		t.Run("NoToken", func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			s.JobsHandler(rr, makeGetReq("auth-test-job"))
+			if rr.Code != http.StatusUnauthorized {
+				t.Errorf("expected 401, got %d", rr.Code)
+			}
+		})
+
+		t.Run("WrongToken", func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			req := makeGetReq("auth-test-job")
+			req.Header.Set("Authorization", "Bearer wrong-token")
+			s.JobsHandler(rr, req)
+			if rr.Code != http.StatusUnauthorized {
+				t.Errorf("expected 401, got %d", rr.Code)
+			}
+		})
+
+		t.Run("CorrectToken", func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			req := makeGetReq("auth-test-job")
+			req.Header.Set("Authorization", "Bearer secret-token")
+			s.JobsHandler(rr, req)
+			if rr.Code != http.StatusOK {
+				t.Errorf("expected 200, got %d", rr.Code)
+			}
+		})
+	})
+
+	t.Run("ResponseIsConsistentJSON", func(t *testing.T) {
+		s := newServer("")
+		now := time.Now()
+		j := &Job{
+			ID:        "json-check",
+			Status:    JobStatusQueued,
+			Request:   ExecRequest{Exec: "echo hi", Concurrency: 1, Iterations: 1},
+			CreatedAt: now,
+		}
+		_ = s.JobStore.Create(j)
+
+		rr := httptest.NewRecorder()
+		s.JobsHandler(rr, makeGetReq("json-check"))
+
+		if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
+			t.Errorf("expected Content-Type application/json, got %q", ct)
+		}
+		if !json.Valid(rr.Body.Bytes()) {
+			t.Errorf("response body is not valid JSON: %s", rr.Body.String())
 		}
 	})
 }
