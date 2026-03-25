@@ -1,6 +1,7 @@
 package server
 
 import (
+	"sort"
 	"sync"
 	"time"
 
@@ -30,15 +31,34 @@ type Job struct {
 	Error       string                  `json:"error,omitempty"`
 }
 
+// JobSummary is a lightweight view of a Job returned by GET /jobs.
+type JobSummary struct {
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	State       JobStatus  `json:"state"`
+	SubmittedAt time.Time  `json:"submitted_at"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	FinishedAt  *time.Time `json:"finished_at,omitempty"`
+}
+
+// ListFilter controls filtering and pagination for List().
+type ListFilter struct {
+	Limit  int
+	Offset int
+	TTL    time.Duration // retention window; 0 means no expiry filter
+}
+
 // JobStore defines the interface for storing and retrieving jobs.
 type JobStore interface {
 	Create(job *Job) error
 	Get(id string) (*Job, bool)
 	Update(job *Job) error
 	Delete(id string) error
-	List() ([]*Job, error)
+	// List returns a page of jobs matching the filter along with the total count
+	// of all matching jobs (before pagination).
+	List(filter ListFilter) ([]*Job, int, error)
 	Cleanup(ttl time.Duration) (int, error)
-	
+
 	// Idempotency support
 	GetByIdempotencyKey(key string) (string, bool)
 	SetIdempotencyKey(key string, jobID string)
@@ -90,14 +110,52 @@ func (s *InMemoryJobStore) Delete(id string) error {
 	return nil
 }
 
-func (s *InMemoryJobStore) List() ([]*Job, error) {
+func (s *InMemoryJobStore) List(filter ListFilter) ([]*Job, int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	jobs := make([]*Job, 0, len(s.jobs))
+
+	now := time.Now()
+	matched := make([]*Job, 0, len(s.jobs))
 	for _, job := range s.jobs {
-		jobs = append(jobs, job.Clone())
+		// Active jobs are always included.
+		if job.Status == JobStatusQueued || job.Status == JobStatusRunning {
+			matched = append(matched, job.Clone())
+			continue
+		}
+		// Terminal jobs: respect TTL if set.
+		if filter.TTL > 0 {
+			var age time.Duration
+			if job.CompletedAt != nil {
+				age = now.Sub(*job.CompletedAt)
+			} else {
+				age = now.Sub(job.CreatedAt)
+			}
+			if age > filter.TTL {
+				continue // expired — skip
+			}
+		}
+		matched = append(matched, job.Clone())
 	}
-	return jobs, nil
+
+	// Sort newest-first by CreatedAt.
+	sort.Slice(matched, func(i, j int) bool {
+		return matched[i].CreatedAt.After(matched[j].CreatedAt)
+	})
+
+	total := len(matched)
+
+	// Apply offset.
+	if filter.Offset >= total {
+		return []*Job{}, total, nil
+	}
+	matched = matched[filter.Offset:]
+
+	// Apply limit.
+	if filter.Limit > 0 && len(matched) > filter.Limit {
+		matched = matched[:filter.Limit]
+	}
+
+	return matched, total, nil
 }
 
 func (s *InMemoryJobStore) Cleanup(ttl time.Duration) (int, error) {

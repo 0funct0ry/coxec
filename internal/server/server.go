@@ -76,6 +76,14 @@ type ExecResponse struct {
 	Error  string                  `json:"error,omitempty"`
 }
 
+// ListJobsResponse is the response body for GET /jobs.
+type ListJobsResponse struct {
+	Jobs   []*JobSummary `json:"jobs"`
+	Total  int           `json:"total"`
+	Limit  int           `json:"limit"`
+	Offset int           `json:"offset"`
+}
+
 // NewServer creates a new Server instance.
 func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry, defaultConcurrency, defaultIterations int, maxConcurrentJobs int, enableSync bool, jobStore JobStore, jobTTL time.Duration) *Server {
 	return &Server{
@@ -107,7 +115,8 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/health", s.HealthHandler)
 	mux.HandleFunc("/exec", s.ExecHandler)
 	mux.HandleFunc("/async/exec", s.AsyncExecHandler)
-	mux.HandleFunc("/jobs/", s.JobsHandler) // Handles GET /jobs/:id and DELETE /jobs/:id
+	mux.HandleFunc("/jobs", s.ListJobsHandler)   // GET /jobs — list all jobs
+	mux.HandleFunc("/jobs/", s.JobsHandler)       // GET|DELETE /jobs/:id
 
 	srv := &http.Server{
 		Addr:    fullAddr,
@@ -493,16 +502,18 @@ type errorResponse struct {
 	err  string
 }
 
-func (s *Server) validateAndParseRequest(w http.ResponseWriter, r *http.Request) (ExecRequest, []byte, *errorResponse) {
+// checkAuth enforces authentication for the given request.
+// body is the already-read request body; pass nil or []byte{} for GET requests.
+// It writes the WWW-Authenticate header (Basic auth) directly to w when needed.
+func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request, body []byte) *errorResponse {
 	if s.AuthToken != "" {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-			return ExecRequest{}, nil, &errorResponse{http.StatusUnauthorized, "unauthorized"}
+			return &errorResponse{http.StatusUnauthorized, "unauthorized"}
 		}
-		
 		token := strings.TrimPrefix(authHeader, "Bearer ")
 		if subtle.ConstantTimeCompare([]byte(token), []byte(s.AuthToken)) != 1 {
-			return ExecRequest{}, nil, &errorResponse{http.StatusUnauthorized, "unauthorized"}
+			return &errorResponse{http.StatusUnauthorized, "unauthorized"}
 		}
 	}
 
@@ -510,35 +521,40 @@ func (s *Server) validateAndParseRequest(w http.ResponseWriter, r *http.Request)
 		user, pass, ok := r.BasicAuth()
 		if !ok {
 			w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
-			return ExecRequest{}, nil, &errorResponse{http.StatusUnauthorized, "unauthorized"}
+			return &errorResponse{http.StatusUnauthorized, "unauthorized"}
 		}
-
 		actualUserPass := user + ":" + pass
 		if subtle.ConstantTimeCompare([]byte(actualUserPass), []byte(s.AuthBasic)) != 1 {
-			return ExecRequest{}, nil, &errorResponse{http.StatusUnauthorized, "unauthorized"}
+			return &errorResponse{http.StatusUnauthorized, "unauthorized"}
 		}
 	}
-
-	rawBytes, _ := io.ReadAll(r.Body)
 
 	if s.AuthHmacSecret != "" {
 		hmacHeader := r.Header.Get("X-Signature")
 		if !strings.HasPrefix(hmacHeader, "sha256=") {
-			return ExecRequest{}, nil, &errorResponse{http.StatusUnauthorized, "unauthorized"}
+			return &errorResponse{http.StatusUnauthorized, "unauthorized"}
 		}
 		providedSig := strings.TrimPrefix(hmacHeader, "sha256=")
 		expectedBytes, err := hex.DecodeString(providedSig)
 		if err != nil {
-			return ExecRequest{}, nil, &errorResponse{http.StatusUnauthorized, "unauthorized"}
+			return &errorResponse{http.StatusUnauthorized, "unauthorized"}
 		}
-
 		mac := hmac.New(sha256.New, []byte(s.AuthHmacSecret))
-		mac.Write(rawBytes)
+		mac.Write(body)
 		computedSig := mac.Sum(nil)
-
 		if !hmac.Equal(computedSig, expectedBytes) {
-			return ExecRequest{}, nil, &errorResponse{http.StatusUnauthorized, "unauthorized"}
+			return &errorResponse{http.StatusUnauthorized, "unauthorized"}
 		}
+	}
+
+	return nil
+}
+
+func (s *Server) validateAndParseRequest(w http.ResponseWriter, r *http.Request) (ExecRequest, []byte, *errorResponse) {
+	rawBytes, _ := io.ReadAll(r.Body)
+
+	if authErr := s.checkAuth(w, r, rawBytes); authErr != nil {
+		return ExecRequest{}, nil, authErr
 	}
 
 	var req ExecRequest
@@ -572,6 +588,89 @@ func (s *Server) validateAndParseRequest(w http.ResponseWriter, r *http.Request)
 	}
 
 	return req, bodyBytes, nil
+}
+
+// jobToSummary converts a Job to its lightweight JobSummary representation.
+// The name is derived from the exec string (first 60 chars).
+func jobToSummary(job *Job) *JobSummary {
+	name := fmt.Sprintf("%v", job.Request.Exec)
+	if len(name) > 60 {
+		name = name[:60]
+	}
+	return &JobSummary{
+		ID:          job.ID,
+		Name:        name,
+		State:       job.Status,
+		SubmittedAt: job.CreatedAt,
+		StartedAt:   job.StartedAt,
+		FinishedAt:  job.CompletedAt,
+	}
+}
+
+// ListJobsHandler handles GET /jobs — returns a paginated, sorted list of job summaries.
+func (s *Server) ListJobsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	s.mu.RLock()
+	currentStatus := s.Status
+	s.mu.RUnlock()
+	if currentStatus != StatusReady {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "server is not ready"})
+		return
+	}
+
+	if authErr := s.checkAuth(w, r, nil); authErr != nil {
+		w.WriteHeader(authErr.code)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": authErr.err})
+		return
+	}
+
+	// Parse pagination params; invalid values fall back to defaults.
+	const defaultLimit = 50
+	const maxLimit = 1000
+	limit := defaultLimit
+	offset := 0
+	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 {
+		limit = v
+		if limit > maxLimit {
+			limit = maxLimit
+		}
+	}
+	if v, err := strconv.Atoi(r.URL.Query().Get("offset")); err == nil && v >= 0 {
+		offset = v
+	}
+
+	filter := ListFilter{
+		Limit:  limit,
+		Offset: offset,
+		TTL:    s.JobTTL,
+	}
+
+	jobs, total, err := s.JobStore.List(filter)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to list jobs"})
+		return
+	}
+
+	summaries := make([]*JobSummary, 0, len(jobs))
+	for _, j := range jobs {
+		summaries = append(summaries, jobToSummary(j))
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(ListJobsResponse{
+		Jobs:   summaries,
+		Total:  total,
+		Limit:  limit,
+		Offset: offset,
+	})
 }
 
 func (s *Server) prepareExecPlan(req ExecRequest, bodyBytes []byte) (string, int, int, map[string]string, error) {

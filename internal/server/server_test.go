@@ -811,3 +811,305 @@ func TestJobCleanup(t *testing.T) {
 		t.Error("job3 should NOT have been cleaned up")
 	}
 }
+
+func TestListJobsHandler(t *testing.T) {
+	newServer := func(authToken string) *Server {
+		s := NewServer("127.0.0.1", 0, "1.0.0", authToken, "", "", "", "", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+		s.Status = StatusReady
+		return s
+	}
+
+	makeGetReq := func(query string) *http.Request {
+		return httptest.NewRequest(http.MethodGet, "/jobs"+query, nil)
+	}
+
+	t.Run("EmptyStore", func(t *testing.T) {
+		s := newServer("")
+		rr := httptest.NewRecorder()
+		s.ListJobsHandler(rr, makeGetReq(""))
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("expected 200, got %d", rr.Code)
+		}
+		var resp ListJobsResponse
+		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if len(resp.Jobs) != 0 {
+			t.Errorf("expected 0 jobs, got %d", len(resp.Jobs))
+		}
+		if resp.Total != 0 {
+			t.Errorf("expected total=0, got %d", resp.Total)
+		}
+		if resp.Limit != 50 {
+			t.Errorf("expected default limit=50, got %d", resp.Limit)
+		}
+		if resp.Offset != 0 {
+			t.Errorf("expected default offset=0, got %d", resp.Offset)
+		}
+	})
+
+	t.Run("SortedNewestFirst", func(t *testing.T) {
+		s := newServer("")
+		now := time.Now()
+
+		jobs := []*Job{
+			{ID: "old", Status: JobStatusCompleted, Request: ExecRequest{Exec: "echo old"}, CreatedAt: now.Add(-2 * time.Hour)},
+			{ID: "mid", Status: JobStatusCompleted, Request: ExecRequest{Exec: "echo mid"}, CreatedAt: now.Add(-1 * time.Hour)},
+			{ID: "new", Status: JobStatusCompleted, Request: ExecRequest{Exec: "echo new"}, CreatedAt: now},
+		}
+		for _, j := range jobs {
+			_ = s.JobStore.Create(j)
+		}
+
+		rr := httptest.NewRecorder()
+		s.ListJobsHandler(rr, makeGetReq(""))
+
+		var resp ListJobsResponse
+		_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+
+		if len(resp.Jobs) != 3 {
+			t.Fatalf("expected 3 jobs, got %d", len(resp.Jobs))
+		}
+		if resp.Jobs[0].ID != "new" {
+			t.Errorf("expected newest job first, got %s", resp.Jobs[0].ID)
+		}
+		if resp.Jobs[1].ID != "mid" {
+			t.Errorf("expected mid job second, got %s", resp.Jobs[1].ID)
+		}
+		if resp.Jobs[2].ID != "old" {
+			t.Errorf("expected oldest job last, got %s", resp.Jobs[2].ID)
+		}
+	})
+
+	t.Run("PaginationLimitOffset", func(t *testing.T) {
+		s := newServer("")
+		now := time.Now()
+
+		for i := 0; i < 5; i++ {
+			j := &Job{
+				ID:        string(rune('a' + i)),
+				Status:    JobStatusCompleted,
+				Request:   ExecRequest{Exec: "echo"},
+				CreatedAt: now.Add(time.Duration(i) * time.Minute),
+			}
+			_ = s.JobStore.Create(j)
+		}
+
+		// limit=2, offset=1 → second and third newest
+		rr := httptest.NewRecorder()
+		s.ListJobsHandler(rr, makeGetReq("?limit=2&offset=1"))
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rr.Code)
+		}
+		var resp ListJobsResponse
+		_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+
+		if resp.Total != 5 {
+			t.Errorf("expected total=5, got %d", resp.Total)
+		}
+		if len(resp.Jobs) != 2 {
+			t.Errorf("expected 2 jobs in page, got %d", len(resp.Jobs))
+		}
+		if resp.Limit != 2 {
+			t.Errorf("expected limit=2, got %d", resp.Limit)
+		}
+		if resp.Offset != 1 {
+			t.Errorf("expected offset=1, got %d", resp.Offset)
+		}
+	})
+
+	t.Run("OffsetPastEnd", func(t *testing.T) {
+		s := newServer("")
+		j := &Job{ID: "x", Status: JobStatusCompleted, Request: ExecRequest{Exec: "echo"}, CreatedAt: time.Now()}
+		_ = s.JobStore.Create(j)
+
+		rr := httptest.NewRecorder()
+		s.ListJobsHandler(rr, makeGetReq("?offset=100"))
+
+		var resp ListJobsResponse
+		_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+
+		if len(resp.Jobs) != 0 {
+			t.Errorf("expected 0 jobs when offset past end, got %d", len(resp.Jobs))
+		}
+		if resp.Total != 1 {
+			t.Errorf("expected total=1 even when offset past end, got %d", resp.Total)
+		}
+	})
+
+	t.Run("TTLFiltering_ExpiredTerminalExcluded_ActiveAlwaysIncluded", func(t *testing.T) {
+		// Server with 1-hour TTL
+		s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore(), 1*time.Hour)
+		s.Status = StatusReady
+
+		now := time.Now()
+		expiredAt := now.Add(-2 * time.Hour) // 2 hours ago → beyond 1-hour TTL
+
+		expiredJob := &Job{
+			ID:          "expired",
+			Status:      JobStatusCompleted,
+			Request:     ExecRequest{Exec: "echo expired"},
+			CreatedAt:   now.Add(-3 * time.Hour),
+			CompletedAt: &expiredAt,
+		}
+		freshAt := now.Add(-30 * time.Minute)
+		freshJob := &Job{
+			ID:          "fresh",
+			Status:      JobStatusCompleted,
+			Request:     ExecRequest{Exec: "echo fresh"},
+			CreatedAt:   now.Add(-1 * time.Hour),
+			CompletedAt: &freshAt,
+		}
+		runningJob := &Job{
+			ID:        "running",
+			Status:    JobStatusRunning,
+			Request:   ExecRequest{Exec: "echo running"},
+			CreatedAt: now.Add(-2 * time.Hour), // old but active → always included
+		}
+		queuedJob := &Job{
+			ID:        "queued",
+			Status:    JobStatusQueued,
+			Request:   ExecRequest{Exec: "echo queued"},
+			CreatedAt: now.Add(-5 * time.Hour), // very old but active → always included
+		}
+
+		for _, j := range []*Job{expiredJob, freshJob, runningJob, queuedJob} {
+			_ = s.JobStore.Create(j)
+		}
+
+		rr := httptest.NewRecorder()
+		s.ListJobsHandler(rr, makeGetReq(""))
+
+		var resp ListJobsResponse
+		_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+
+		// Should see: fresh, running, queued (3). NOT expired.
+		if resp.Total != 3 {
+			t.Errorf("expected 3 visible jobs (TTL filtered expired), got %d", resp.Total)
+		}
+		idSet := make(map[string]bool)
+		for _, j := range resp.Jobs {
+			idSet[j.ID] = true
+		}
+		if idSet["expired"] {
+			t.Error("expired job should have been filtered by TTL")
+		}
+		if !idSet["fresh"] {
+			t.Error("fresh completed job should be included (within TTL)")
+		}
+		if !idSet["running"] {
+			t.Error("running job should always be included regardless of age")
+		}
+		if !idSet["queued"] {
+			t.Error("queued job should always be included regardless of age")
+		}
+	})
+
+	t.Run("JobSummaryFields", func(t *testing.T) {
+		s := newServer("")
+		now := time.Now()
+		startedAt := now.Add(-10 * time.Minute)
+		finishedAt := now.Add(-5 * time.Minute)
+
+		j := &Job{
+			ID:          "summary-test",
+			Status:      JobStatusCompleted,
+			Request:     ExecRequest{Exec: "echo hello world"},
+			CreatedAt:   now.Add(-15 * time.Minute),
+			StartedAt:   &startedAt,
+			CompletedAt: &finishedAt,
+		}
+		_ = s.JobStore.Create(j)
+
+		rr := httptest.NewRecorder()
+		s.ListJobsHandler(rr, makeGetReq(""))
+
+		var resp ListJobsResponse
+		_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+
+		if len(resp.Jobs) != 1 {
+			t.Fatalf("expected 1 job, got %d", len(resp.Jobs))
+		}
+		sum := resp.Jobs[0]
+		if sum.ID != "summary-test" {
+			t.Errorf("expected id=summary-test, got %s", sum.ID)
+		}
+		if sum.Name != "echo hello world" {
+			t.Errorf("expected name='echo hello world', got %q", sum.Name)
+		}
+		if sum.State != JobStatusCompleted {
+			t.Errorf("expected state=completed, got %s", sum.State)
+		}
+		if sum.StartedAt == nil {
+			t.Error("expected started_at to be set")
+		}
+		if sum.FinishedAt == nil {
+			t.Error("expected finished_at to be set")
+		}
+	})
+
+	t.Run("MethodNotAllowed", func(t *testing.T) {
+		s := newServer("")
+		tests := []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch}
+		for _, method := range tests {
+			rr := httptest.NewRecorder()
+			req := httptest.NewRequest(method, "/jobs", nil)
+			s.ListJobsHandler(rr, req)
+			if rr.Code != http.StatusMethodNotAllowed {
+				t.Errorf("method %s: expected 405, got %d", method, rr.Code)
+			}
+		}
+	})
+
+	t.Run("AuthEnforced", func(t *testing.T) {
+		s := newServer("secret-token")
+
+		t.Run("NoToken", func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			s.ListJobsHandler(rr, makeGetReq(""))
+			if rr.Code != http.StatusUnauthorized {
+				t.Errorf("expected 401, got %d", rr.Code)
+			}
+		})
+
+		t.Run("WrongToken", func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			req := makeGetReq("")
+			req.Header.Set("Authorization", "Bearer wrong-token")
+			s.ListJobsHandler(rr, req)
+			if rr.Code != http.StatusUnauthorized {
+				t.Errorf("expected 401, got %d", rr.Code)
+			}
+		})
+
+		t.Run("CorrectToken", func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			req := makeGetReq("")
+			req.Header.Set("Authorization", "Bearer secret-token")
+			s.ListJobsHandler(rr, req)
+			if rr.Code != http.StatusOK {
+				t.Errorf("expected 200, got %d", rr.Code)
+			}
+		})
+	})
+
+	t.Run("InvalidQueryParams_FallbackToDefaults", func(t *testing.T) {
+		s := newServer("")
+		rr := httptest.NewRecorder()
+		s.ListJobsHandler(rr, makeGetReq("?limit=notanumber&offset=alsonotanumber"))
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("expected 200 even with invalid params, got %d", rr.Code)
+		}
+		var resp ListJobsResponse
+		_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+		if resp.Limit != 50 {
+			t.Errorf("expected default limit=50 for invalid param, got %d", resp.Limit)
+		}
+		if resp.Offset != 0 {
+			t.Errorf("expected default offset=0 for invalid param, got %d", resp.Offset)
+		}
+	})
+}

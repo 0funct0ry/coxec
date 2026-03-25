@@ -221,6 +221,41 @@ The `Idempotency-Key` header is supported to prevent duplicate job submissions. 
 #### Job Management
 Monitor and control asynchronous jobs using the `/jobs` endpoint:
 
+- **List All Jobs**: `GET /jobs`
+  Returns a paginated list of job summaries for all current and recently completed jobs, sorted by submission time (newest first). Only jobs within the configured retention window are shown; running and queued jobs are always included.
+
+  ```bash
+  # List all jobs (defaults: limit=50, offset=0)
+  curl -s 'http://localhost:8080/jobs' | jq .
+
+  # Paginate: second page of results
+  curl -s 'http://localhost:8080/jobs?limit=10&offset=10' | jq .
+  ```
+
+  **Response:**
+  ```json
+  {
+    "jobs": [
+      {
+        "id": "550e8400-e29b-41d4-a716-446655440000",
+        "name": ".sleep 10s",
+        "state": "completed",
+        "submitted_at": "2026-03-25T08:00:00Z",
+        "started_at": "2026-03-25T08:00:00Z",
+        "finished_at": "2026-03-25T08:00:10Z"
+      }
+    ],
+    "total": 1,
+    "limit": 50,
+    "offset": 0
+  }
+  ```
+
+  | Query Param | Default | Max   | Description                   |
+  |-------------|---------|-------|-------------------------------|
+  | `limit`     | `50`    | `1000`| Max jobs to return per page   |
+  | `offset`    | `0`     | —     | Number of jobs to skip        |
+
 - **Check Status**: `GET /jobs/:id`
   Returns the current state (`queued`, `running`, `completed`, `failed`, `cancelled`) and the final execution report once finished.
   
@@ -231,6 +266,7 @@ Monitor and control asynchronous jobs using the `/jobs` endpoint:
   ```bash
   coxec --server --job-ttl 1h
   ```
+
 
 #### Supported Fields
 - `exec`: (Required) The command string to execute.
