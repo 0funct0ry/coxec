@@ -53,6 +53,7 @@ type Server struct {
 	JobStore           JobStore
 	JobTTL             time.Duration
 	jobCancels         map[string]context.CancelFunc
+	jobSubscribers     sync.Map // map[string]*sync.Map (subID -> chan interface{})
 }
 
 // ExecRequest defines the payload for POST /exec
@@ -143,7 +144,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/exec", s.ExecHandler)
 	mux.HandleFunc("/async/exec", s.AsyncExecHandler)
 	mux.HandleFunc("/jobs", s.ListJobsHandler)   // GET /jobs — list all jobs
-	mux.HandleFunc("/jobs/", s.JobsHandler)       // GET|DELETE /jobs/:id
+	mux.HandleFunc("/jobs/", s.JobsHandler)       // GET|DELETE /jobs/:id OR GET /jobs/:id/stream
 
 	srv := &http.Server{
 		Addr:    fullAddr,
@@ -444,6 +445,12 @@ func (s *Server) AsyncExecHandler(w http.ResponseWriter, r *http.Request) {
 			Jitter:        jitter,
 			RampUp:        rampup,
 			RateLimit:     rateLimit,
+			OnResult: func(detail engine.ExecutionDetail) {
+				s.broadcast(jobID, map[string]interface{}{
+					"type": "result",
+					"data": detail,
+				})
+			},
 		}
 
 		tasks := s.generateTasks(ctx, iterations, execStr, rateLimit, delay, jitter)
@@ -462,6 +469,12 @@ func (s *Server) AsyncExecHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		job.Report = report
 		_ = s.JobStore.Update(job)
+
+		s.broadcast(jobID, map[string]interface{}{
+			"type": "done",
+			"data": jobToDetail(job),
+		})
+		s.closeSubscribers(jobID)
 	}()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -487,6 +500,11 @@ func (s *Server) JobsHandler(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": authErr.err})
 			return
 		}
+		if strings.HasSuffix(r.URL.Path, "/stream") {
+			s.JobStreamHandler(w, r)
+			return
+		}
+
 		job, ok := s.JobStore.Get(id)
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
@@ -586,6 +604,135 @@ func jobToDetail(job *Job) *JobDetailResponse {
 
 	return resp
 }
+
+func (s *Server) subscribe(jobID string) (chan interface{}, func()) {
+	ch := make(chan interface{}, 100)
+
+	val, _ := s.jobSubscribers.LoadOrStore(jobID, &sync.Map{})
+	subMap := val.(*sync.Map)
+
+	subID := engine.GenerateUUIDv4()
+	subMap.Store(subID, ch)
+
+	cleanup := func() {
+		subMap.Delete(subID)
+	}
+
+	return ch, cleanup
+}
+
+func (s *Server) broadcast(jobID string, event interface{}) {
+	if val, ok := s.jobSubscribers.Load(jobID); ok {
+		subMap := val.(*sync.Map)
+		subMap.Range(func(key, value interface{}) bool {
+			ch := value.(chan interface{})
+			select {
+			case ch <- event:
+			default:
+				// Channel full, slower client might miss an event
+			}
+			return true
+		})
+	}
+}
+
+func (s *Server) closeSubscribers(jobID string) {
+	if val, ok := s.jobSubscribers.LoadAndDelete(jobID); ok {
+		subMap := val.(*sync.Map)
+		subMap.Range(func(key, value interface{}) bool {
+			ch := value.(chan interface{})
+			close(ch)
+			return true
+		})
+	}
+}
+
+// JobStreamHandler handles GET /jobs/:id/stream — streams execution results via SSE.
+func (s *Server) JobStreamHandler(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/jobs/")
+	id = strings.TrimSuffix(id, "/stream")
+
+	if authErr := s.checkAuth(w, r, nil); authErr != nil {
+		w.WriteHeader(authErr.code)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": authErr.err})
+		return
+	}
+
+	job, ok := s.JobStore.Get(id)
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "job not found or expired"})
+		return
+	}
+
+	// Set headers for SSE
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	// If job is already terminal, send existing results (if any) and the final report.
+	if job.Status == JobStatusCompleted || job.Status == JobStatusFailed || job.Status == JobStatusCancelled {
+		if job.Report != nil {
+			for _, detail := range job.Report.Details {
+				data, _ := json.Marshal(map[string]interface{}{
+					"type": "result",
+					"data": detail,
+				})
+				fmt.Fprintf(w, "event: result\ndata: %s\n\n", data)
+			}
+		}
+		
+		finalData, _ := json.Marshal(map[string]interface{}{
+			"type": "done",
+			"data": jobToDetail(job),
+		})
+		fmt.Fprintf(w, "event: done\ndata: %s\n\n", finalData)
+		flusher.Flush()
+		return
+	}
+
+	// Subscribe to real-time updates
+	ch, cleanup := s.subscribe(id)
+	defer cleanup()
+
+	// Send a heartbeat to establish connection
+	fmt.Fprintf(w, ": heartbeat\n\n")
+	flusher.Flush()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case event, ok := <-ch:
+			if !ok {
+				return
+			}
+			
+			evtMap := event.(map[string]interface{})
+			evtType := evtMap["type"].(string)
+			data, _ := json.Marshal(evtMap)
+			
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", evtType, data)
+			flusher.Flush()
+			
+			if evtType == "done" {
+				return
+			}
+		case <-time.After(15 * time.Second):
+			// Keep alive
+			fmt.Fprintf(w, ": heartbeat\n\n")
+			flusher.Flush()
+		}
+	}
+}
+
 
 type errorResponse struct {
 	code int

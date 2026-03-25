@@ -1547,8 +1547,90 @@ func TestJobCancellation(t *testing.T) {
         if job.Status != JobStatusCancelled {
             t.Errorf("expected status cancelled, got %s", job.Status)
         }
-        if job.CompletedAt == nil {
-            t.Error("expected CompletedAt to be set")
-        }
-    })
+		if job.CompletedAt == nil {
+			t.Error("expected CompletedAt to be set")
+		}
+	})
+}
+
+func TestJobStreamHandler(t *testing.T) {
+	registry := engine.NewBuiltinRegistry()
+	registry.Register(engine.NewSleepClient())
+	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+	s.Status = StatusReady
+
+	t.Run("StreamExecutionResults", func(t *testing.T) {
+		payload := ExecRequest{
+			Exec:        ".sleep 10ms",
+			Concurrency: 1,
+			Iterations:  3,
+		}
+		body, _ := json.Marshal(payload)
+		req := httptest.NewRequest("POST", "/async/exec", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		s.AsyncExecHandler(rr, req)
+
+		var resp map[string]string
+		json.Unmarshal(rr.Body.Bytes(), &resp)
+		jobID := resp["job_id"]
+
+		// Connect to stream
+		reqStream := httptest.NewRequest("GET", "/jobs/"+jobID+"/stream", nil)
+		rrStream := httptest.NewRecorder()
+
+		// Use a context with timeout for the stream request
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		reqStream = reqStream.WithContext(ctx)
+
+		// Run JobStreamHandler in a goroutine because it blocks
+		done := make(chan bool)
+		go func() {
+			s.JobStreamHandler(rrStream, reqStream)
+			done <- true
+		}()
+
+		select {
+		case <-done:
+			// Handler finished (either job done or context cancelled)
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for JobStreamHandler to finish")
+		}
+
+		output := rrStream.Body.String()
+		
+		// Verify SSE structure
+		if !strings.Contains(output, "event: result") {
+			t.Errorf("expected 'event: result' in output, got %q", output)
+		}
+		if !strings.Contains(output, "event: done") {
+			t.Errorf("expected 'event: done' in output, got %q", output)
+		}
+		
+		// Count result events
+		resultsCount := strings.Count(output, "event: result")
+		if resultsCount != 3 {
+			t.Errorf("expected 3 result events, got %d", resultsCount)
+		}
+
+		// Verify data contains expected fields
+		if !strings.Contains(output, `"worker_id":0`) {
+			t.Errorf("expected worker_id:0 in output, got %q", output)
+		}
+	})
+
+	t.Run("AuthEnforced", func(t *testing.T) {
+		sAuth := NewServer("127.0.0.1", 0, "1.0.0", "secret-token", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+		sAuth.Status = StatusReady
+
+		req := httptest.NewRequest("GET", "/jobs/some-id/stream", nil)
+		rr := httptest.NewRecorder()
+
+		sAuth.JobStreamHandler(rr, req)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401 Unauthorized, got %d", rr.Code)
+		}
+	})
 }

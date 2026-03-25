@@ -297,6 +297,39 @@ Monitor and control asynchronous jobs using the `/jobs` endpoint:
   coxec --server --job-ttl 1h
   ```
 
+- **Live Streaming**: `GET /jobs/:id/stream`
+  Opens a Server-Sent Events (SSE) connection to stream execution results in real-time as they complete. The stream continues until the job reaches a terminal state, at which point a final summary event is sent and the connection is closed.
+
+  ```bash
+  curl -H "Authorization: Bearer super-secret-token" -N http://localhost:8080/jobs/:id/stream
+  ```
+
+  **Events:**
+  - `result`: Emitted for each completed execution.
+    ```json
+    {
+      "type": "result",
+      "data": {
+        "index": 1,
+        "worker_id": 0,
+        "status": "success",
+        "duration": "100.5ms",
+        "status_code": 200
+      }
+    }
+    ```
+  - `done`: Emitted when the job is finished.
+    ```json
+    {
+      "type": "done",
+      "data": {
+        "job_id": "...",
+        "state": "completed",
+        "summary": { ... }
+      }
+    }
+    ```
+
 
 #### Supported Fields
 - `exec`: (Required) The command string to execute.

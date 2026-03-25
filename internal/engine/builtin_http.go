@@ -168,7 +168,7 @@ func (c *HTTPClient) Execute(ctx context.Context, args []string, data IterationD
 		eStr := err.Error()
 		errMsg = &eStr
 		category := categorizeHTTPError(err)
-		httpErr = NewHTTPError(category, err)
+		httpErr = NewHTTPError(category, 0, err)
 	} else {
 		defer resp.Body.Close()
 		statusCode = resp.StatusCode
@@ -182,7 +182,7 @@ func (c *HTTPClient) Execute(ctx context.Context, args []string, data IterationD
 		if readErr != nil {
 			eStr := fmt.Sprintf("failed to read response body: %v", readErr)
 			errMsg = &eStr
-			httpErr = NewHTTPError("body_read_error", readErr)
+			httpErr = NewHTTPError("body_read_error", statusCode, readErr)
 		} else {
 			respBody = b
 		}
@@ -196,7 +196,7 @@ func (c *HTTPClient) Execute(ctx context.Context, args []string, data IterationD
 			} else {
 				cat = "http_4xx"
 			}
-			httpErr = NewHTTPError(cat, fmt.Errorf("HTTP %d", statusCode))
+			httpErr = NewHTTPError(cat, statusCode, fmt.Errorf("HTTP %d", statusCode))
 		}
 	}
 
@@ -257,6 +257,9 @@ func (c *HTTPClient) Execute(ctx context.Context, args []string, data IterationD
 		Stderr:   "",
 		ExitCode: 0,
 		Latency:  latency.Nanoseconds(),
+		Metadata: map[string]interface{}{
+			"status_code": statusCode,
+		},
 	}
 
 	if httpErr != nil {

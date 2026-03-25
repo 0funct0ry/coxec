@@ -68,10 +68,11 @@ type ExecOptions struct {
 	Jitter        time.Duration
 	RampUp        time.Duration
 	RateLimit     float64
+	OnResult      func(ExecutionDetail)
 }
 
 // RunPipeline executes a series of pipeline steps
-func RunPipeline(task Task, opts ExecOptions) error {
+func RunPipeline(task Task, opts ExecOptions) (*Result, error) {
 	if opts.Stdout == nil {
 		opts.Stdout = os.Stdout
 	}
@@ -104,7 +105,7 @@ func RunPipeline(task Task, opts ExecOptions) error {
 
 	steps := SplitPipeline(task.Command)
 	if len(steps) == 0 {
-		return nil // Should be caught by EMPTY_TEMPLATE validation earlier but safe to handle
+		return nil, nil // Should be caught by EMPTY_TEMPLATE validation earlier but safe to handle
 	}
 
 	var prevResult *Result
@@ -122,7 +123,7 @@ func RunPipeline(task Task, opts ExecOptions) error {
 		}, opts.TemplateState)
 
 		if renderErr != nil {
-			return renderErr
+			return nil, renderErr
 		}
 
 		if renderedStep == "" {
@@ -209,14 +210,14 @@ func RunPipeline(task Task, opts ExecOptions) error {
 
 		if err != nil {
 			if ctx.Err() != nil {
-				return ctx.Err()
+				return prevResult, ctx.Err()
 			}
-			return err
+			return prevResult, err
 		}
 		prevResult = currentResult
 	}
 
-	return nil
+	return prevResult, nil
 }
 
 func runShellStep(ctx context.Context, command string, taskIndex int) (*Result, error) {
@@ -320,25 +321,41 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) (*Executio
 					taskOpts.Silent = false // Enable writing so we can capture it
 				}
 
-				err := RunPipeline(task, taskOpts)
+				res, err := RunPipeline(task, taskOpts)
 				duration := time.Since(taskStart)
 
-				if opts.Verbose {
-					detail := ExecutionDetail{
-						Index:    task.Index,
-						Status:   "success",
-						Duration: duration.Round(time.Microsecond).String(),
-						Output:   stderr.String(),
+				detail := ExecutionDetail{
+					Index:      task.Index,
+					WorkerID:   task.WorkerID,
+					Status:     "success",
+					Duration:   duration.Round(time.Microsecond).String(),
+				}
+
+				if err != nil {
+					detail.Status = "fail"
+					detail.Error = err.Error()
+
+					var he *HTTPError
+					if errors.As(err, &he) {
+						detail.StatusCode = he.StatusCode
 					}
-					if err != nil {
-						detail.Status = "fail"
-						detail.Error = err.Error()
-						if stderr.Len() > 0 {
-							if detail.Output != "" {
-								detail.Output += "\n"
-							}
-							detail.Output += "Stderr: " + stderr.String()
+				} else if res != nil && res.Metadata != nil {
+					if sc, ok := res.Metadata["status_code"].(int); ok {
+						detail.StatusCode = sc
+					}
+				}
+
+				if opts.OnResult != nil {
+					opts.OnResult(detail)
+				}
+
+				if opts.Verbose {
+					detail.Output = stderr.String()
+					if err != nil && stderr.Len() > 0 {
+						if detail.Output != "" {
+							detail.Output += "\n"
 						}
+						detail.Output += "Stderr: " + stderr.String()
 					}
 					detailsMu.Lock()
 					details = append(details, detail)

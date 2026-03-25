@@ -108,7 +108,7 @@ func TestRunShellCommand_Silent(t *testing.T) {
 	}
 	task := engine.Task{Index: 1, Command: "echo 'hello world'"}
 
-	err := engine.RunPipeline(task, opts)
+	_, err := engine.RunPipeline(task, opts)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -129,7 +129,7 @@ func TestRunShellCommand_VerboseSilent(t *testing.T) {
 	}
 	task := engine.Task{Index: 1, Command: "echo 'hello world'"}
 
-	err := engine.RunPipeline(task, opts)
+	_, err := engine.RunPipeline(task, opts)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -155,7 +155,7 @@ func TestRunShellCommand_TemplateContext(t *testing.T) {
 	}
 	task := engine.Task{Index: 5, WorkerID: 3, Command: "echo it:{{.Iteration}} wrk:{{.WorkerID}}"}
 
-	err := engine.RunPipeline(task, opts)
+	_, err := engine.RunPipeline(task, opts)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -177,7 +177,7 @@ func TestRunShellCommand_UserVarsWithCommas(t *testing.T) {
 	}
 	task := engine.Task{Index: 1, Command: "echo {{.Var \"filter\" | quote}}"}
 
-	err := engine.RunPipeline(task, opts)
+	_, err := engine.RunPipeline(task, opts)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -199,7 +199,7 @@ func TestRunShellCommand_QuoteInjection(t *testing.T) {
 	}
 	task := engine.Task{Index: 1, Command: "echo {{.Var \"payload\" | quote}}"}
 
-	err := engine.RunPipeline(task, opts)
+	_, err := engine.RunPipeline(task, opts)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -227,7 +227,7 @@ func TestRunShellCommand_AdvancedContext(t *testing.T) {
 		UUID:      uuid,
 	}
 
-	err := engine.RunPipeline(task, opts)
+	_, err := engine.RunPipeline(task, opts)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -272,7 +272,7 @@ func TestRunShellCommand_ImplicitGeneration(t *testing.T) {
 		Command: "echo ts:{{.Timestamp}} uuid:{{.UUID}}",
 	}
 
-	err := engine.RunPipeline(task, opts)
+	_, err := engine.RunPipeline(task, opts)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -314,7 +314,7 @@ func TestRunPipeline_BuiltinVsShell(t *testing.T) {
 
 	// 1. Dotted name should use built-in. .sleep is transparent, so no stdout.
 	taskBuiltin := engine.Task{Index: 1, Command: ".sleep 10ms"}
-	err := engine.RunPipeline(taskBuiltin, opts)
+	_, err := engine.RunPipeline(taskBuiltin, opts)
 	if err != nil {
 		t.Fatalf("expected no error from .sleep built-in, got %v", err)
 	}
@@ -327,7 +327,7 @@ func TestRunPipeline_BuiltinVsShell(t *testing.T) {
 	// Actually, if it falls through to shell, it will execute `sh -c 'sleep 0.01'`.
 	taskShell := engine.Task{Index: 1, Command: "sleep 0.01"}
 	start := time.Now()
-	err = engine.RunPipeline(taskShell, opts)
+	_, err = engine.RunPipeline(taskShell, opts)
 	if err != nil {
 		t.Fatalf("expected no error from shell sleep fallthrough, got %v", err)
 	}
@@ -348,7 +348,7 @@ func TestRunPipeline_Timeout(t *testing.T) {
 
 	// This command takes 100ms, but timeout is 10ms
 	task := engine.Task{Index: 1, Command: "sleep 0.1"}
-	err := engine.RunPipeline(task, opts)
+	_, err := engine.RunPipeline(task, opts)
 
 	if err == nil {
 		t.Fatal("expected error due to timeout, got nil")

@@ -18,15 +18,18 @@ type Result struct {
 	ExitCode      int
 	Latency       int64 // in nanoseconds
 	IsTransparent bool  // If true, Stdout has already been handled or should be ignored for display
+	Metadata      map[string]interface{}
 }
 
 // ExecutionDetail represents the detailed result of a single execution
 type ExecutionDetail struct {
-	Index    int    `json:"index"`
-	Status   string `json:"status"`
-	Duration string `json:"duration"`
-	Output   string `json:"output,omitempty"`
-	Error    string `json:"error,omitempty"`
+	Index      int    `json:"index"`
+	WorkerID   int    `json:"worker_id"`
+	Status     string `json:"status"`
+	Duration   string `json:"duration"`
+	StatusCode int    `json:"status_code,omitempty"`
+	Output     string `json:"output,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 // ExecutionReport represents a full summary of a completed Job Pool execution
