@@ -330,6 +330,47 @@ Monitor and control asynchronous jobs using the `/jobs` endpoint:
     }
     ```
 
+- **Final Report**: `GET /jobs/:id/report`
+  Returns a comprehensive, structured JSON report for a completed, failed, or cancelled job. This includes success rates, latency percentiles (min, p50, p75, p90, p95, p99, max), and an error breakdown by type and message.
+  - Returns `425 Too Early` if the job is still in progress (`queued` or `running`).
+  - Returns `404 Not Found` if the job does not exist or has expired.
+
+  ```bash
+  curl -s http://localhost:8080/jobs/550e8400-e29b-41d4-a716-446655440000/report | jq .
+  ```
+
+  **Response:**
+  ```json
+  {
+    "job_id": "550e8400-e29b-41d4-a716-446655440000",
+    "status": "partial",
+    "duration": "10.05s",
+    "concurrency": 10,
+    "iterations": {
+      "requested": 100,
+      "completed": 100
+    },
+    "counts": {
+      "success": 95,
+      "failure": 5,
+      "retry": 0
+    },
+    "latencies": {
+      "min": "50ms",
+      "p50": "100ms",
+      "p75": "120ms",
+      "p90": "150ms",
+      "p95": "180ms",
+      "p99": "200ms",
+      "max": "250ms"
+    },
+    "errors": [
+      { "type": "HTTP", "message": "500 Internal Server Error", "count": 3 },
+      { "type": "TCP", "message": "connection refused", "count": 2 }
+    ]
+  }
+  ```
+
 
 #### Supported Fields
 - `exec`: (Required) The command string to execute.

@@ -511,11 +511,14 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) (*Executio
 		avgLat := time.Duration(totalLat / int64(len(latencies)))
 		report.AverageLatency = avgLat.Round(time.Microsecond).String()
 
-		p50, p90, p95, p99 := calculatePercentiles(latencies)
+		p50, p75, p90, p95, p99 := calculatePercentiles(latencies)
+		report.MinLatency = time.Duration(sortedLatencies(latencies)[0]).String()
 		report.P50Latency = p50.String()
+		report.P75Latency = p75.String()
 		report.P90Latency = p90.String()
 		report.P95Latency = p95.String()
 		report.P99Latency = p99.String()
+		report.MaxLatency = time.Duration(sortedLatencies(latencies)[len(latencies)-1]).String()
 	}
 
 	if opts.Report {
@@ -540,8 +543,8 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) (*Executio
 
 		// Also print percentiles if report is true
 		if len(latencies) > 0 {
-			fmt.Fprintf(stderr, "Percentiles: p50=%s p90=%s p95=%s p99=%s\n",
-				report.P50Latency, report.P90Latency, report.P95Latency, report.P99Latency)
+			fmt.Fprintf(stderr, "Percentiles: min=%s p50=%s p75=%s p90=%s p95=%s p99=%s max=%s\n",
+				report.MinLatency, report.P50Latency, report.P75Latency, report.P90Latency, report.P95Latency, report.P99Latency, report.MaxLatency)
 		}
 	}
 
@@ -561,19 +564,24 @@ func RunJobPool(concurrency int, tasks <-chan Task, opts ExecOptions) (*Executio
 	return report, nil
 }
 
-func calculatePercentiles(latencies []int64) (p50, p90, p95, p99 time.Duration) {
+func calculatePercentiles(latencies []int64) (p50, p75, p90, p95, p99 time.Duration) {
 	if len(latencies) == 0 {
-		return 0, 0, 0, 0
+		return 0, 0, 0, 0, 0
 	}
-	sorted := make([]int64, len(latencies))
-	copy(sorted, latencies)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	sorted := sortedLatencies(latencies)
 
 	getPercentile := func(p float64) time.Duration {
 		idx := int(float64(len(sorted)-1) * p / 100.0)
 		return time.Duration(sorted[idx])
 	}
 
-	return getPercentile(50), getPercentile(90), getPercentile(95), getPercentile(99)
+	return getPercentile(50), getPercentile(75), getPercentile(90), getPercentile(95), getPercentile(99)
+}
+
+func sortedLatencies(latencies []int64) []int64 {
+	sorted := make([]int64, len(latencies))
+	copy(sorted, latencies)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	return sorted
 }
 

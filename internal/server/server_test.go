@@ -1553,6 +1553,109 @@ func TestJobCancellation(t *testing.T) {
 	})
 }
 
+func TestJobReportHandler(t *testing.T) {
+	newServer := func() *Server {
+		s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+		s.Status = StatusReady
+		return s
+	}
+
+	t.Run("ReportNotFound", func(t *testing.T) {
+		s := newServer()
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/jobs/nonexistent/report", nil)
+		s.JobsHandler(rr, req)
+
+		if rr.Code != http.StatusNotFound {
+			t.Errorf("expected 404, got %d", rr.Code)
+		}
+	})
+
+	t.Run("ReportTooEarly", func(t *testing.T) {
+		s := newServer()
+		j := &Job{
+			ID:        "running-job",
+			Status:    JobStatusRunning,
+			Request:   ExecRequest{Exec: "echo hi"},
+			CreatedAt: time.Now(),
+		}
+		_ = s.JobStore.Create(j)
+
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/jobs/running-job/report", nil)
+		s.JobsHandler(rr, req)
+
+		if rr.Code != http.StatusTooEarly {
+			t.Errorf("expected 425, got %d", rr.Code)
+		}
+	})
+
+	t.Run("ReportCompleted", func(t *testing.T) {
+		s := newServer()
+		report := &engine.ExecutionReport{
+			TotalExecutions: 10,
+			SuccessCount:    8,
+			FailCount:       2,
+			TotalDuration:   "5s",
+			MinLatency:      "100ms",
+			P50Latency:      "200ms",
+			P75Latency:      "250ms",
+			P90Latency:      "300ms",
+			P95Latency:      "400ms",
+			P99Latency:      "500ms",
+			MaxLatency:      "600ms",
+			HTTPErrors:     map[string]int{"500 Internal Server Error": 2},
+		}
+		j := &Job{
+			ID:     "done-job",
+			Status: JobStatusCompleted,
+			Request: ExecRequest{
+				Exec:        "echo hi",
+				Concurrency: 2,
+				Iterations:  10,
+			},
+			CreatedAt: time.Now(),
+			Report:    report,
+		}
+		_ = s.JobStore.Create(j)
+
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/jobs/done-job/report", nil)
+		s.JobsHandler(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rr.Code)
+		}
+
+		var resp JobReportResponse
+		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+
+		if resp.JobID != "done-job" {
+			t.Errorf("expected job_id=done-job, got %s", resp.JobID)
+		}
+		if resp.Status != "partial" {
+			t.Errorf("expected status=partial, got %s", resp.Status)
+		}
+		if resp.Counts.Success != 8 {
+			t.Errorf("expected success=8, got %d", resp.Counts.Success)
+		}
+		if resp.Counts.Failure != 2 {
+			t.Errorf("expected failure=2, got %d", resp.Counts.Failure)
+		}
+		if resp.Latencies.P99 != "500ms" {
+			t.Errorf("expected p99=500ms, got %s", resp.Latencies.P99)
+		}
+		if len(resp.Errors) != 1 {
+			t.Errorf("expected 1 error entry, got %d", len(resp.Errors))
+		}
+		if resp.Errors[0].Count != 2 {
+			t.Errorf("expected error count 2, got %d", resp.Errors[0].Count)
+		}
+	})
+}
+
 func TestJobStreamHandler(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
 	registry.Register(engine.NewSleepClient())

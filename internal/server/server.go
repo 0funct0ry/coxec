@@ -112,6 +112,39 @@ type JobDetailResponse struct {
 	Error               string           `json:"error,omitempty"`
 }
 
+// JobReportResponse defines the detailed summary of a terminal job.
+type JobReportResponse struct {
+	JobID       string `json:"job_id"`
+	Status      string `json:"status"` // overall status: success, partial, failed
+	Duration    string `json:"duration"`
+	Concurrency int    `json:"concurrency"`
+	Iterations  struct {
+		Requested int `json:"requested"`
+		Completed int `json:"completed"`
+	} `json:"iterations"`
+	Counts struct {
+		Success int `json:"success"`
+		Failure int `json:"failure"`
+		Retry   int `json:"retry"`
+	} `json:"counts"`
+	Latencies struct {
+		Min string `json:"min"`
+		P50 string `json:"p50"`
+		P75 string `json:"p75"`
+		P90 string `json:"p90"`
+		P95 string `json:"p95"`
+		P99 string `json:"p99"`
+		Max string `json:"max"`
+	} `json:"latencies"`
+	Errors []JobErrorReport `json:"errors,omitempty"`
+}
+
+type JobErrorReport struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+	Count   int    `json:"count"`
+}
+
 // NewServer creates a new Server instance.
 func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry, defaultConcurrency, defaultIterations int, maxConcurrentJobs int, enableSync bool, jobStore JobStore, jobTTL time.Duration) *Server {
 	return &Server{
@@ -500,6 +533,10 @@ func (s *Server) JobsHandler(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": authErr.err})
 			return
 		}
+		if strings.HasSuffix(r.URL.Path, "/report") {
+			s.JobReportHandler(w, r)
+			return
+		}
 		if strings.HasSuffix(r.URL.Path, "/stream") {
 			s.JobStreamHandler(w, r)
 			return
@@ -732,7 +769,101 @@ func (s *Server) JobStreamHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
+// JobReportHandler handles GET /jobs/:id/report — returns a detailed terminal report.
+func (s *Server) JobReportHandler(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/jobs/")
+	id = strings.TrimSuffix(id, "/report")
 
+	job, ok := s.JobStore.Get(id)
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "job not found or expired"})
+		return
+	}
+
+	// 425 Too Early if job is still running or queued
+	if job.Status == JobStatusQueued || job.Status == JobStatusRunning {
+		w.WriteHeader(http.StatusTooEarly)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": "job is still in progress",
+			"status": string(job.Status),
+		})
+		return
+	}
+
+	if job.Report == nil {
+		// Should not happen for terminal jobs unless they failed before starting
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"job_id": job.ID,
+			"status": string(job.Status),
+			"error":  job.Error,
+		})
+		return
+	}
+
+	resp := JobReportResponse{
+		JobID:       job.ID,
+		Duration:    job.Report.TotalDuration,
+		Concurrency: job.Request.Concurrency,
+	}
+
+	resp.Iterations.Requested = job.Request.Iterations
+	resp.Iterations.Completed = job.Report.TotalExecutions
+
+	resp.Counts.Success = job.Report.SuccessCount
+	resp.Counts.Failure = job.Report.FailCount
+	resp.Counts.Retry = 0 // Not implemented yet
+
+	// Overall status
+	if resp.Counts.Failure == 0 {
+		resp.Status = "success"
+	} else if resp.Counts.Success > 0 {
+		resp.Status = "partial"
+	} else {
+		resp.Status = "failed"
+	}
+
+	resp.Latencies.Min = job.Report.MinLatency
+	resp.Latencies.P50 = job.Report.P50Latency
+	resp.Latencies.P75 = job.Report.P75Latency
+	resp.Latencies.P90 = job.Report.P90Latency
+	resp.Latencies.P95 = job.Report.P95Latency
+	resp.Latencies.P99 = job.Report.P99Latency
+	resp.Latencies.Max = job.Report.MaxLatency
+
+	// Errors breakdown
+	for errType, count := range job.Report.HTTPErrors {
+		resp.Errors = append(resp.Errors, JobErrorReport{
+			Type:    "HTTP",
+			Message: errType,
+			Count:   count,
+		})
+	}
+	for errType, count := range job.Report.TCPErrors {
+		resp.Errors = append(resp.Errors, JobErrorReport{
+			Type:    "TCP",
+			Message: errType,
+			Count:   count,
+		})
+	}
+	for errType, count := range job.Report.TemplateErrors {
+		resp.Errors = append(resp.Errors, JobErrorReport{
+			Type:    "Template",
+			Message: errType,
+			Count:   count,
+		})
+	}
+
+	// Sort errors by count descending
+	sort.Slice(resp.Errors, func(i, j int) bool {
+		return resp.Errors[i].Count > resp.Errors[j].Count
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(resp)
+}
 
 type errorResponse struct {
 	code int

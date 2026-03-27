@@ -40,10 +40,13 @@ type ExecutionReport struct {
 	TimeoutCount    int               `json:"timeout_count"`
 	TotalDuration   string            `json:"total_duration"`
 	AverageLatency  string            `json:"average_latency"`
+	MinLatency      string            `json:"min_latency"`
 	P50Latency      string            `json:"p50_latency"`
+	P75Latency      string            `json:"p75_latency"`
 	P90Latency      string            `json:"p90_latency"`
 	P95Latency      string            `json:"p95_latency"`
 	P99Latency      string            `json:"p99_latency"`
+	MaxLatency      string            `json:"max_latency"`
 	RatePerSecond   float64           `json:"rate_per_second"`
 	HTTPErrors      map[string]int    `json:"http_errors,omitempty"`
 	TCPErrors       map[string]int    `json:"tcp_errors,omitempty"`
