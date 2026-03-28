@@ -271,8 +271,24 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 				if err != nil {
 					return fmt.Errorf("failed to initialize sqlite job store: %w", err)
 				}
-			default:
+			case "redis":
+				if jobStoreDSN == "" {
+					jobStoreDSN = "redis://localhost:6379/0"
+				}
+				var err error
+				js, err = server.NewRedisJobStore(jobStoreDSN)
+				if err != nil {
+					return fmt.Errorf("failed to initialize redis job store: %w", err)
+				}
+			case "memory", "":
 				js = server.NewInMemoryJobStore()
+			default:
+				return &ValidationError{
+					ExitCode:   validationExitCode,
+					ID:         "INVALID_JOB_STORE",
+					Message:    fmt.Sprintf("unknown job-store type: %s", jobStoreType),
+					Suggestion: "supported types are: memory, sqlite, redis",
+				}
 			}
 
 			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations, maxConcurrentJobs, enableSync, js, jobTTL, jobHistory, namedJobs)
@@ -497,7 +513,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 	cmd.Flags().Bool("enable-sync", true, "Enable synchronous execution mode")
 	cmd.Flags().Duration("job-ttl", 24*time.Hour, "How long to keep completed/failed/cancelled jobs in memory")
 	cmd.Flags().Int("job-history", 1000, "Maximum number of completed jobs to retain in memory")
-	cmd.Flags().String("job-store", "memory", "Job store backend (memory, sqlite)")
+	cmd.Flags().String("job-store", "memory", "Job store backend (memory, sqlite, redis)")
 	cmd.Flags().String("job-store-dsn", "", "Data source name for the job store (e.g. ./coxec-jobs.db)")
 	cmd.Flags().StringArray("job", nil, "Define a named job (name=... exec=... concurrency=...)")
 

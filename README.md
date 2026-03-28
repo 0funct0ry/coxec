@@ -293,11 +293,14 @@ Monitor and control asynchronous jobs using the `/jobs` endpoint:
   
   In-progress executions are notified of cancellation via context propagation, allowing them to stop gracefully.
 
-- **Automatic Cleanup**: Finished jobs are automatically removed from memory or disk based on time (`--job-ttl`) and quantity (`--job-history`). By default, `coxec` keeps up to 1000 completed jobs for up to 24 hours using its built-in `JobStore`. The server supports an in-memory store (default) and a persistent SQLite store. Cleanup happens in the background every minute.
+- **Automatic Cleanup**: Finished jobs are automatically removed from memory or disk based on time (`--job-ttl`) and quantity (`--job-history`). By default, `coxec` keeps up to 1000 completed jobs for up to 24 hours using its built-in `JobStore`. The server supports an in-memory store (default), persistent SQLite store, and shared Redis store. Cleanup happens in the background every minute.
   
   ```bash
   # Keep jobs for only 1 hour and at most 100 recent jobs using SQLite persistence
   coxec --server --job-store sqlite --job-store-dsn ./coxec-jobs.db --job-ttl 1h --job-history 100
+
+  # Use shared Redis store for multi-instance deployments
+  coxec --server --job-store redis --job-store-dsn redis://localhost:6379/0
   ```
 
 - **Live Streaming**: `GET /jobs/:id/stream`
@@ -422,8 +425,8 @@ The endpoint returns `400 Bad Request` for invalid payloads (e.g. non-positive v
 - `--enable-sync bool`: Enable synchronous execution mode (default: `true`).
 - `--job-ttl duration`: Time to retain finished jobs in memory or disk (default: `24h`).
 - `--job-history int`: Maximum number of completed jobs to retain (default: `1000`).
-- `--job-store string`: Job store backend: `memory` (default) or `sqlite`.
-- `--job-store-dsn string`: Data source name for the job store (e.g., `./coxec-jobs.db`).
+- `--job-store string`: Job store backend: `memory` (default), `sqlite`, or `redis`.
+- `--job-store-dsn string`: Data source name for the job store (e.g., `./coxec-jobs.db` or `redis://localhost:6379/0`).
 - `-c, --concurrency int`: Number of concurrent workers. (default: `1`)
 - `-n, --iterations int`: Total number of executions (defaults to `--concurrency`).
 - `--rate string`: Maximum execution rate (e.g., `50/s`, `10/m`, `1/h`).
