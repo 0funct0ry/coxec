@@ -36,3 +36,4 @@ bin/
 coxec
 cert.pem
 key.pem
+*.db

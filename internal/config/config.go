@@ -26,6 +26,8 @@ type ServerConfig struct {
 	EnableSync         bool             `mapstructure:"enable-sync"`
 	JobHistory         int              `mapstructure:"job-history"`
 	JobTTL             string           `mapstructure:"job-ttl"`
+	JobStore           string           `mapstructure:"job-store"`
+	JobStoreDSN        string           `mapstructure:"job-store-dsn"`
 	TLS                TLSConfig        `mapstructure:"tls"`
 	Jobs               []NamedJobConfig `mapstructure:"jobs"`
 }

@@ -133,6 +133,8 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 		v.BindPFlag("server.enable-sync", cmd.Flags().Lookup("enable-sync"))
 		v.BindPFlag("server.job-ttl", cmd.Flags().Lookup("job-ttl"))
 		v.BindPFlag("server.job-history", cmd.Flags().Lookup("job-history"))
+		v.BindPFlag("server.job-store", cmd.Flags().Lookup("job-store"))
+		v.BindPFlag("server.job-store-dsn", cmd.Flags().Lookup("job-store-dsn"))
 
 		loadedConfig, err := config.LoadConfig(v, configPath)
 		if err != nil {
@@ -152,6 +154,8 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 		enableSync := v.GetBool("server.enable-sync")
 		jobTTL := v.GetDuration("server.job-ttl")
 		jobHistory := v.GetInt("server.job-history")
+		jobStoreType := v.GetString("server.job-store")
+		jobStoreDSN := v.GetString("server.job-store-dsn")
 
 		// Named jobs from config
 		var namedJobs []config.NamedJobConfig
@@ -256,7 +260,22 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 			if loadedConfig != "" {
 				fmt.Fprintf(os.Stderr, "Config loaded from: %s\n", loadedConfig)
 			}
-			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations, maxConcurrentJobs, enableSync, server.NewInMemoryJobStore(), jobTTL, jobHistory, namedJobs)
+			var js server.JobStore
+			switch strings.ToLower(jobStoreType) {
+			case "sqlite":
+				if jobStoreDSN == "" {
+					jobStoreDSN = "coxec-jobs.db"
+				}
+				var err error
+				js, err = server.NewSQLiteJobStore(jobStoreDSN)
+				if err != nil {
+					return fmt.Errorf("failed to initialize sqlite job store: %w", err)
+				}
+			default:
+				js = server.NewInMemoryJobStore()
+			}
+
+			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations, maxConcurrentJobs, enableSync, js, jobTTL, jobHistory, namedJobs)
 			return s.Start(ctx)
 		}
 
@@ -478,6 +497,8 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 	cmd.Flags().Bool("enable-sync", true, "Enable synchronous execution mode")
 	cmd.Flags().Duration("job-ttl", 24*time.Hour, "How long to keep completed/failed/cancelled jobs in memory")
 	cmd.Flags().Int("job-history", 1000, "Maximum number of completed jobs to retain in memory")
+	cmd.Flags().String("job-store", "memory", "Job store backend (memory, sqlite)")
+	cmd.Flags().String("job-store-dsn", "", "Data source name for the job store (e.g. ./coxec-jobs.db)")
 	cmd.Flags().StringArray("job", nil, "Define a named job (name=... exec=... concurrency=...)")
 
 	// Register built-in client subcommands for help and discovery
