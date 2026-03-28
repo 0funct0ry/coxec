@@ -24,6 +24,8 @@ type ServerConfig struct {
 	DefaultConcurrency int              `mapstructure:"default-concurrency"`
 	DefaultIterations  int              `mapstructure:"default-iterations"`
 	EnableSync         bool             `mapstructure:"enable-sync"`
+	JobHistory         int              `mapstructure:"job-history"`
+	JobTTL             string           `mapstructure:"job-ttl"`
 	TLS                TLSConfig        `mapstructure:"tls"`
 	Jobs               []NamedJobConfig `mapstructure:"jobs"`
 }

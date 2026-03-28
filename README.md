@@ -293,9 +293,11 @@ Monitor and control asynchronous jobs using the `/jobs` endpoint:
   
   In-progress executions are notified of cancellation via context propagation, allowing them to stop gracefully.
 
-- **Automatic Cleanup**: Finished jobs are automatically removed from memory after a configurable period (default: `24h`). You can adjust this using the `--job-ttl` flag:
+- **Automatic Cleanup**: Finished jobs are automatically removed from memory based on time (`--job-ttl`) and quantity (`--job-history`). By default, `coxec` keeps up to 1000 completed jobs for up to 24 hours. Cleanup happens in the background every minute.
+  
   ```bash
-  coxec --server --job-ttl 1h
+  # Keep jobs for only 1 hour and at most 100 recent jobs
+  coxec --server --job-ttl 1h --job-history 100
   ```
 
 - **Live Streaming**: `GET /jobs/:id/stream`
@@ -419,6 +421,7 @@ The endpoint returns `400 Bad Request` for invalid payloads (e.g. non-positive v
 - `--max-concurrent-jobs int`: Maximum number of concurrent jobs (requests) allowed globally.
 - `--enable-sync bool`: Enable synchronous execution mode (default: `true`).
 - `--job-ttl duration`: Time to retain finished jobs in memory (default: `24h`).
+- `--job-history int`: Maximum number of completed jobs to retain in memory (default: `1000`).
 - `-c, --concurrency int`: Number of concurrent workers. (default: `1`)
 - `-n, --iterations int`: Total number of executions (defaults to `--concurrency`).
 - `--rate string`: Maximum execution rate (e.g., `50/s`, `10/m`, `1/h`).

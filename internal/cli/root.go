@@ -132,6 +132,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 		v.BindPFlag("server.max-concurrent-jobs", cmd.Flags().Lookup("max-concurrent-jobs"))
 		v.BindPFlag("server.enable-sync", cmd.Flags().Lookup("enable-sync"))
 		v.BindPFlag("server.job-ttl", cmd.Flags().Lookup("job-ttl"))
+		v.BindPFlag("server.job-history", cmd.Flags().Lookup("job-history"))
 
 		loadedConfig, err := config.LoadConfig(v, configPath)
 		if err != nil {
@@ -150,6 +151,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 		maxConcurrentJobs := v.GetInt("server.max-concurrent-jobs")
 		enableSync := v.GetBool("server.enable-sync")
 		jobTTL := v.GetDuration("server.job-ttl")
+		jobHistory := v.GetInt("server.job-history")
 
 		// Named jobs from config
 		var namedJobs []config.NamedJobConfig
@@ -254,7 +256,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 			if loadedConfig != "" {
 				fmt.Fprintf(os.Stderr, "Config loaded from: %s\n", loadedConfig)
 			}
-			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations, maxConcurrentJobs, enableSync, server.NewInMemoryJobStore(), jobTTL, namedJobs)
+			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations, maxConcurrentJobs, enableSync, server.NewInMemoryJobStore(), jobTTL, jobHistory, namedJobs)
 			return s.Start(ctx)
 		}
 
@@ -475,6 +477,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 	cmd.Flags().Int("max-concurrent-jobs", 0, "Maximum number of concurrent jobs (requests) allowed globally")
 	cmd.Flags().Bool("enable-sync", true, "Enable synchronous execution mode")
 	cmd.Flags().Duration("job-ttl", 24*time.Hour, "How long to keep completed/failed/cancelled jobs in memory")
+	cmd.Flags().Int("job-history", 1000, "Maximum number of completed jobs to retain in memory")
 	cmd.Flags().StringArray("job", nil, "Define a named job (name=... exec=... concurrency=...)")
 
 	// Register built-in client subcommands for help and discovery

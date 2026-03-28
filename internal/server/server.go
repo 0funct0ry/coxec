@@ -53,6 +53,7 @@ type Server struct {
 	EnableSync         bool
 	JobStore           JobStore
 	JobTTL             time.Duration
+	JobHistory         int
 	NamedJobs          map[string]config.NamedJobConfig
 	jobCancels         map[string]context.CancelFunc
 	jobSubscribers     sync.Map // map[string]*sync.Map (subID -> chan interface{})
@@ -149,7 +150,7 @@ type JobErrorReport struct {
 }
 
 // NewServer creates a new Server instance.
-func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry, defaultConcurrency, defaultIterations int, maxConcurrentJobs int, enableSync bool, jobStore JobStore, jobTTL time.Duration, namedJobs []config.NamedJobConfig) *Server {
+func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry, defaultConcurrency, defaultIterations int, maxConcurrentJobs int, enableSync bool, jobStore JobStore, jobTTL time.Duration, jobHistory int, namedJobs []config.NamedJobConfig) *Server {
 	njMap := make(map[string]config.NamedJobConfig)
 	for _, nj := range namedJobs {
 		njMap[nj.Name] = nj
@@ -173,6 +174,7 @@ func NewServer(addr string, port int, version string, authToken string, authBasi
 		EnableSync:         enableSync,
 		JobStore:           jobStore,
 		JobTTL:             jobTTL,
+		JobHistory:         jobHistory,
 		NamedJobs:          njMap,
 		jobCancels:         make(map[string]context.CancelFunc),
 	}
@@ -217,16 +219,16 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Start background cleanup
 	go func() {
-		ticker := time.NewTicker(1 * time.Hour)
+		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				count, _ := s.JobStore.Cleanup(s.JobTTL)
+				count, _ := s.JobStore.Prune(s.JobHistory, s.JobTTL)
 				if count > 0 {
-					fmt.Printf("[%s] Cleaned up %d expired jobs\n", time.Now().Format(time.RFC3339), count)
+					fmt.Printf("[%s] Pruned %d completed jobs (Limit: %d, TTL: %v)\n", time.Now().Format(time.RFC3339), count, s.JobHistory, s.JobTTL)
 				}
 			}
 		}

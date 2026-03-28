@@ -57,7 +57,7 @@ type JobStore interface {
 	// List returns a page of jobs matching the filter along with the total count
 	// of all matching jobs (before pagination).
 	List(filter ListFilter) ([]*Job, int, error)
-	Cleanup(ttl time.Duration) (int, error)
+	Prune(limit int, ttl time.Duration) (int, error)
 
 	// Idempotency support
 	GetByIdempotencyKey(key string) (string, bool)
@@ -158,26 +158,70 @@ func (s *InMemoryJobStore) List(filter ListFilter) ([]*Job, int, error) {
 	return matched, total, nil
 }
 
-func (s *InMemoryJobStore) Cleanup(ttl time.Duration) (int, error) {
+func (s *InMemoryJobStore) Prune(limit int, ttl time.Duration) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
-	count := 0
+
 	now := time.Now()
-	for id, job := range s.jobs {
-		// Only clean up finished jobs
+	var terminalJobs []*Job
+	for _, job := range s.jobs {
 		if job.Status == JobStatusCompleted || job.Status == JobStatusFailed || job.Status == JobStatusCancelled {
-			if job.CompletedAt != nil && now.Sub(*job.CompletedAt) > ttl {
-				delete(s.jobs, id)
-				count++
-			} else if job.CompletedAt == nil && now.Sub(job.CreatedAt) > ttl {
-				// Fallback for cases where CompletedAt is not set but job is in a terminal state
-				delete(s.jobs, id)
-				count++
-			}
+			terminalJobs = append(terminalJobs, job)
 		}
 	}
+
+	count := 0
+	// 1. TTL eviction
+	for _, job := range terminalJobs {
+		var age time.Duration
+		if job.CompletedAt != nil {
+			age = now.Sub(*job.CompletedAt)
+		} else {
+			age = now.Sub(job.CreatedAt)
+		}
+
+		if ttl > 0 && age > ttl {
+			delete(s.jobs, job.ID)
+			s.removeIdempotencyKeyForJob(job.ID)
+			count++
+		}
+	}
+
+	// Refresh terminal jobs list after TTL eviction
+	terminalJobs = terminalJobs[:0]
+	for _, job := range s.jobs {
+		if job.Status == JobStatusCompleted || job.Status == JobStatusFailed || job.Status == JobStatusCancelled {
+			terminalJobs = append(terminalJobs, job)
+		}
+	}
+
+	// 2. History limit eviction (FIFO based on CreatedAt)
+	if limit > 0 && len(terminalJobs) > limit {
+		// Sort by CreatedAt ascending (oldest first)
+		sort.Slice(terminalJobs, func(i, j int) bool {
+			return terminalJobs[i].CreatedAt.Before(terminalJobs[j].CreatedAt)
+		})
+
+		toEvict := len(terminalJobs) - limit
+		for i := 0; i < toEvict; i++ {
+			job := terminalJobs[i]
+			delete(s.jobs, job.ID)
+			s.removeIdempotencyKeyForJob(job.ID)
+			count++
+		}
+	}
+
 	return count, nil
+}
+
+func (s *InMemoryJobStore) removeIdempotencyKeyForJob(jobID string) {
+	for k, v := range s.idempotencyMap {
+		if v == jobID {
+			delete(s.idempotencyMap, k)
+			// Assume one-to-one mapping for now, or continue if many-to-one
+			return
+		}
+	}
 }
 
 // Clone creates a deep copy of the Job
