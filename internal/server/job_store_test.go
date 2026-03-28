@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -132,4 +133,98 @@ func TestInMemoryJobStore_Prune(t *testing.T) {
 			t.Error("job3 should remain")
 		}
 	})
+}
+
+func TestInMemoryJobStore_List(t *testing.T) {
+	store := NewInMemoryJobStore()
+	now := time.Now()
+
+	// Create 10 jobs with different timestamps
+	for i := 1; i <= 10; i++ {
+		job := &Job{
+			ID:        fmt.Sprintf("job%02d", i),
+			Status:    JobStatusCompleted,
+			CreatedAt: now.Add(time.Duration(i) * time.Minute),
+		}
+		store.Create(job)
+	}
+
+	t.Run("FullList", func(t *testing.T) {
+		jobs, total, err := store.List(ListFilter{})
+		if err != nil {
+			t.Fatalf("List failed: %v", err)
+		}
+		if total != 10 {
+			t.Errorf("expected 10 jobs, got %d", total)
+		}
+		if len(jobs) != 10 {
+			t.Errorf("expected length 10, got %d", len(jobs))
+		}
+		// Newest first
+		if jobs[0].ID != "job10" {
+			t.Errorf("expected first job to be job10, got %s", jobs[0].ID)
+		}
+	})
+
+	t.Run("Pagination", func(t *testing.T) {
+		// Page 1: limit 3, offset 0
+		jobs, total, _ := store.List(ListFilter{Limit: 3, Offset: 0})
+		if total != 10 {
+			t.Errorf("total should be 10, got %d", total)
+		}
+		if len(jobs) != 3 {
+			t.Errorf("length should be 3, got %d", len(jobs))
+		}
+		if jobs[0].ID != "job10" || jobs[1].ID != "job09" || jobs[2].ID != "job08" {
+			t.Errorf("unexpected order in page 1")
+		}
+
+		// Page 2: limit 3, offset 3
+		jobs, _, _ = store.List(ListFilter{Limit: 3, Offset: 3})
+		if len(jobs) != 3 {
+			t.Errorf("length should be 3, got %d", len(jobs))
+		}
+		if jobs[0].ID != "job07" || jobs[1].ID != "job06" || jobs[2].ID != "job05" {
+			t.Errorf("unexpected order in page 2")
+		}
+	})
+
+	t.Run("TTLFiltering", func(t *testing.T) {
+		// Mark job01-job05 as old
+		for i := 1; i <= 5; i++ {
+			id := fmt.Sprintf("job%02d", i)
+			job, _ := store.Get(id)
+			comp := now.Add(-2 * time.Hour)
+			job.CompletedAt = &comp
+			store.Update(job)
+		}
+
+		// List with TTL 1h. Should only see job06-job10.
+		jobs, total, _ := store.List(ListFilter{TTL: 1 * time.Hour})
+		if total != 5 {
+			t.Errorf("expected 5 matching jobs, got %d", total)
+		}
+		if len(jobs) != 5 {
+			t.Errorf("expected length 5, got %d", len(jobs))
+		}
+		for _, j := range jobs {
+			if j.ID < "job06" {
+				t.Errorf("job %s should have been filtered by TTL", j.ID)
+			}
+		}
+	})
+}
+
+func TestInMemoryJobStore_Idempotency(t *testing.T) {
+	store := NewInMemoryJobStore()
+	
+	store.SetIdempotencyKey("key1", "job1")
+	
+	if id, ok := store.GetByIdempotencyKey("key1"); !ok || id != "job1" {
+		t.Errorf("expected job1 for key1, got %s, %v", id, ok)
+	}
+	
+	if id, ok := store.GetByIdempotencyKey("unknown"); ok {
+		t.Errorf("expected false for unknown key, got %s", id)
+	}
 }

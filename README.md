@@ -293,7 +293,7 @@ Monitor and control asynchronous jobs using the `/jobs` endpoint:
   
   In-progress executions are notified of cancellation via context propagation, allowing them to stop gracefully.
 
-- **Automatic Cleanup**: Finished jobs are automatically removed from memory based on time (`--job-ttl`) and quantity (`--job-history`). By default, `coxec` keeps up to 1000 completed jobs for up to 24 hours. Cleanup happens in the background every minute.
+- **Automatic Cleanup**: Finished jobs are automatically removed from memory based on time (`--job-ttl`) and quantity (`--job-history`). By default, `coxec` keeps up to 1000 completed jobs for up to 24 hours using its built-in `JobStore` (in-memory implementation). This abstraction allows for future durable backends (e.g., SQLite, Postgres) while keeping the default server overhead minimal. Cleanup happens in the background every minute.
   
   ```bash
   # Keep jobs for only 1 hour and at most 100 recent jobs
