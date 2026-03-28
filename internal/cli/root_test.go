@@ -134,3 +134,36 @@ func TestTLSFlagValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestNamedJobConfigLoading(t *testing.T) {
+	configContent := `
+server:
+  jobs:
+    - name: "job1"
+      exec: "echo 1"
+jobs:
+  - name: "job2"
+    exec: "echo 2"
+named_jobs:
+  - name: "job3"
+    exec: "echo 3"
+`
+	os.WriteFile("test-jobs.yaml", []byte(configContent), 0644)
+	defer os.Remove("test-jobs.yaml")
+
+	cmd := NewRootCmd()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	
+	cmd.SetArgs([]string{"-s", "--config", "test-jobs.yaml", "--port", "0"})
+	
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	err := cmd.ExecuteContext(ctx)
+	if err != nil && err != context.Canceled {
+		t.Errorf("expected no error or context.Canceled, got %v", err)
+	}
+}

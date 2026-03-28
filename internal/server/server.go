@@ -513,19 +513,7 @@ func (s *Server) AsyncExecHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check Idempotency-Key
-	idempotencyKey := r.Header.Get("Idempotency-Key")
-	if idempotencyKey != "" {
-		if existingID, ok := s.JobStore.GetByIdempotencyKey(idempotencyKey); ok {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(map[string]string{
-				"job_id": existingID,
-				"status": "queued",
-			})
-			return
-		}
-	}
+	// Idempotency check is now handled in runAsyncJob which is called by runAsyncJob via AsyncExecHandler and NamedJobRunHandler
 
 	req, bodyBytes, errorRes := s.validateAndParseRequest(w, r)
 	if errorRes != nil {
@@ -538,11 +526,24 @@ func (s *Server) AsyncExecHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) runAsyncJob(w http.ResponseWriter, r *http.Request, req ExecRequest, bodyBytes []byte) {
+	idempotencyKey := r.Header.Get("Idempotency-Key")
+	if idempotencyKey != "" {
+		if existingID, ok := s.JobStore.GetByIdempotencyKey(idempotencyKey); ok {
+			if job, exists := s.JobStore.Get(existingID); exists {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"job_id": existingID,
+					"status": string(job.Status),
+				})
+				return
+			}
+		}
+	}
+
 	if !s.checkConcurrencyLimit(w) {
 		return
 	}
-
-	idempotencyKey := r.Header.Get("Idempotency-Key")
 	
 	execStr, concurrency, iterations, _, err := s.prepareExecPlan(req, bodyBytes)
 	if err != nil {
@@ -559,14 +560,14 @@ func (s *Server) runAsyncJob(w http.ResponseWriter, r *http.Request, req ExecReq
 		CreatedAt: time.Now(),
 	}
 
-	if idempotencyKey != "" {
-		s.JobStore.SetIdempotencyKey(idempotencyKey, jobID)
-	}
-
 	if err := s.JobStore.Create(job); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "failed to create job"})
 		return
+	}
+
+	if idempotencyKey != "" {
+		s.JobStore.SetIdempotencyKey(idempotencyKey, jobID)
 	}
 
 	// Start background execution

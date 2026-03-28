@@ -217,7 +217,7 @@ curl -i -X POST http://localhost:8080/async/exec \
 }
 ```
 
-The `Idempotency-Key` header is supported to prevent duplicate job submissions. If a job with the same key already exists, the server returns the existing `job_id` with a `200 OK` status.
+The `Idempotency-Key` header is supported on `/async/exec` and `/jobs/:name/run` to prevent duplicate job submissions. If a request with the same key is received, the server returns the existing `job_id` with a `200 OK` status, safely ensuring that identical jobs are not executed multiple times.
 
 #### Job Management
 Monitor and control asynchronous jobs using the `/jobs` endpoint:

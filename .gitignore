@@ -37,3 +37,4 @@ coxec
 cert.pem
 key.pem
 *.db
+coxec.yaml

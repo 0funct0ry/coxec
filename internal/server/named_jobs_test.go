@@ -116,4 +116,40 @@ func TestNamedJobTriggering(t *testing.T) {
 			t.Errorf("expected status 404, got %d", rr.Code)
 		}
 	})
+
+	t.Run("TriggerIdempotent", func(t *testing.T) {
+		key := "named-idempotency-key"
+		
+		// First request
+		req1 := httptest.NewRequest("POST", "/jobs/test-echo/run", nil)
+		req1.Header.Set("Idempotency-Key", key)
+		rr1 := httptest.NewRecorder()
+		s.handleJobsPath(rr1, req1)
+		
+		if rr1.Code != http.StatusAccepted {
+			t.Errorf("expected status 202 for first request, got %d", rr1.Code)
+		}
+		
+		var resp1 map[string]string
+		json.Unmarshal(rr1.Body.Bytes(), &resp1)
+		id1 := resp1["job_id"]
+
+		// Second request (retry)
+		req2 := httptest.NewRequest("POST", "/jobs/test-echo/run", nil)
+		req2.Header.Set("Idempotency-Key", key)
+		rr2 := httptest.NewRecorder()
+		s.handleJobsPath(rr2, req2)
+		
+		if rr2.Code != http.StatusOK {
+			t.Errorf("expected status 200 for idempotent retry, got %d", rr2.Code)
+		}
+		
+		var resp2 map[string]string
+		json.Unmarshal(rr2.Body.Bytes(), &resp2)
+		id2 := resp2["job_id"]
+
+		if id1 != id2 {
+			t.Errorf("expected same job_id for same idempotency key, got %s and %s", id1, id2)
+		}
+	})
 }

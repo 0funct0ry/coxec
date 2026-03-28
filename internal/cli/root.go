@@ -157,10 +157,26 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 		jobStoreType := v.GetString("server.job-store")
 		jobStoreDSN := v.GetString("server.job-store-dsn")
 
-		// Named jobs from config
+		// Named jobs from config (try multiple locations for flexibility)
 		var namedJobs []config.NamedJobConfig
-		if err := v.UnmarshalKey("server.jobs", &namedJobs); err != nil {
-			return fmt.Errorf("failed to parse named jobs from config: %w", err)
+		if v.IsSet("server.jobs") {
+			if err := v.UnmarshalKey("server.jobs", &namedJobs); err != nil {
+				return fmt.Errorf("failed to parse 'server.jobs' from config: %w", err)
+			}
+		}
+		if v.IsSet("jobs") {
+			var topJobs []config.NamedJobConfig
+			if err := v.UnmarshalKey("jobs", &topJobs); err != nil {
+				return fmt.Errorf("failed to parse top-level 'jobs' from config: %w", err)
+			}
+			namedJobs = append(namedJobs, topJobs...)
+		}
+		if v.IsSet("named_jobs") {
+			var altJobs []config.NamedJobConfig
+			if err := v.UnmarshalKey("named_jobs", &altJobs); err != nil {
+				return fmt.Errorf("failed to parse 'named_jobs' from config: %w", err)
+			}
+			namedJobs = append(namedJobs, altJobs...)
 		}
 
 		// Named jobs from CLI flags
