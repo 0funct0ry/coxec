@@ -82,10 +82,11 @@ type ExecResponse struct {
 
 // ListJobsResponse is the response body for GET /jobs.
 type ListJobsResponse struct {
-	Jobs   []*JobSummary `json:"jobs"`
-	Total  int           `json:"total"`
-	Limit  int           `json:"limit"`
-	Offset int           `json:"offset"`
+	Jobs       []*JobSummary `json:"jobs"`
+	Total      int           `json:"total"`
+	Limit      int           `json:"limit"`
+	Offset     int           `json:"offset"`
+	ActiveJobs int           `json:"active_jobs"`
 }
 
 // JobSummaryStats holds aggregate statistics for a terminal job.
@@ -268,6 +269,20 @@ func (s *Server) HealthHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) checkConcurrencyLimit(w http.ResponseWriter) bool {
+	if s.MaxConcurrentJobs > 0 && s.ActiveJobs.Load() >= int32(s.MaxConcurrentJobs) {
+		w.Header().Set("Retry-After", "60")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"status": "error",
+			"error":  "server at maximum concurrent job capacity",
+		})
+		return false
+	}
+	return true
+}
+
 func (s *Server) ExecHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -285,9 +300,7 @@ func (s *Server) ExecHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.MaxConcurrentJobs > 0 && s.ActiveJobs.Load() >= int32(s.MaxConcurrentJobs) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "server at maximum capacity"})
+	if !s.checkConcurrencyLimit(w) {
 		return
 	}
 
@@ -522,6 +535,10 @@ func (s *Server) AsyncExecHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) runAsyncJob(w http.ResponseWriter, r *http.Request, req ExecRequest, bodyBytes []byte) {
+	if !s.checkConcurrencyLimit(w) {
+		return
+	}
+
 	idempotencyKey := r.Header.Get("Idempotency-Key")
 	
 	execStr, concurrency, iterations, _, err := s.prepareExecPlan(req, bodyBytes)
@@ -1154,10 +1171,11 @@ func (s *Server) ListJobsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(ListJobsResponse{
-		Jobs:   summaries,
-		Total:  total,
-		Limit:  limit,
-		Offset: offset,
+		Jobs:       summaries,
+		Total:      total,
+		Limit:      limit,
+		Offset:     offset,
+		ActiveJobs: int(s.ActiveJobs.Load()),
 	})
 }
 

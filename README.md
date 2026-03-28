@@ -137,7 +137,7 @@ server:
 Environment variables follow the pattern `COXEC_SERVER_<KEY>` (e.g., `COXEC_SERVER_AUTH_TOKEN`, `COXEC_SERVER_MAX_CONCURRENT_JOBS`).
 
 #### Global Capacity Limit
-The `max-concurrent-jobs` setting (or `--max-concurrent-jobs` flag) enforces a global limit on the number of active requests (jobs) the server handles at once. When the limit is reached, new requests receive a `503 Service Unavailable` response.
+The `max-concurrent-jobs` setting (or `--max-concurrent-jobs` flag) enforces a global limit on the number of active requests (jobs) the server handles at once. When the limit is reached, new requests receive a `429 Too Many Requests` response with a `Retry-After: 60` header.
 
 #### Health Check
 Verify the server status using the `/health` endpoint:
@@ -247,7 +247,8 @@ Monitor and control asynchronous jobs using the `/jobs` endpoint:
     ],
     "total": 1,
     "limit": 50,
-    "offset": 0
+    "offset": 0,
+    "active_jobs": 0
   }
   ```
 

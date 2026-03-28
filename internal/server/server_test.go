@@ -1737,3 +1737,144 @@ func TestJobStreamHandler(t *testing.T) {
 		}
 	})
 }
+
+func TestMaxConcurrentJobs(t *testing.T) {
+	registry := engine.NewBuiltinRegistry()
+	registry.Register(engine.NewSleepClient())
+	// Set limit to 1
+	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 0, 0, 1, true, NewInMemoryJobStore(), 24*time.Hour, nil)
+	s.Status = StatusReady
+
+	t.Run("EnforceOnSync", func(t *testing.T) {
+		// Mock an active job
+		s.ActiveJobs.Store(1)
+		defer s.ActiveJobs.Store(0)
+
+		payload := ExecRequest{Exec: "echo 1"}
+		body, _ := json.Marshal(payload)
+		req := httptest.NewRequest("POST", "/exec", bytes.NewBuffer(body))
+		rr := httptest.NewRecorder()
+
+		s.ExecHandler(rr, req)
+
+		if rr.Code != http.StatusTooManyRequests {
+			t.Errorf("expected status 429, got %d", rr.Code)
+		}
+		if rr.Header().Get("Retry-After") != "60" {
+			t.Errorf("expected Retry-After: 60, got %q", rr.Header().Get("Retry-After"))
+		}
+		var resp map[string]string
+		_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+		if !strings.Contains(resp["error"], "maximum concurrent job capacity") {
+			t.Errorf("unexpected error message: %s", resp["error"])
+		}
+	})
+
+	t.Run("EnforceOnAsync", func(t *testing.T) {
+		// Mock an active job
+		s.ActiveJobs.Store(1)
+		defer s.ActiveJobs.Store(0)
+
+		payload := ExecRequest{Exec: "echo 1"}
+		body, _ := json.Marshal(payload)
+		req := httptest.NewRequest("POST", "/async/exec", bytes.NewBuffer(body))
+		rr := httptest.NewRecorder()
+
+		s.AsyncExecHandler(rr, req)
+
+		if rr.Code != http.StatusTooManyRequests {
+			t.Errorf("expected status 429, got %d", rr.Code)
+		}
+		if rr.Header().Get("Retry-After") != "60" {
+			t.Errorf("expected Retry-After: 60, got %q", rr.Header().Get("Retry-After"))
+		}
+	})
+
+	t.Run("RealConcurrentUsage", func(t *testing.T) {
+		s.ActiveJobs.Store(0)
+		
+		// 1. Submit a long-running async job
+		payload := ExecRequest{
+			Exec:       ".sleep 200ms",
+			Iterations: 1,
+		}
+		body, _ := json.Marshal(payload)
+		req1 := httptest.NewRequest("POST", "/async/exec", bytes.NewBuffer(body))
+		rr1 := httptest.NewRecorder()
+		s.AsyncExecHandler(rr1, req1)
+
+		if rr1.Code != http.StatusAccepted {
+			t.Fatalf("first job should be accepted, got %d", rr1.Code)
+		}
+
+		// Wait for the goroutine to start and increment ActiveJobs
+		timeout := time.After(1 * time.Second)
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		
+		found := false
+		for !found {
+			select {
+			case <-timeout:
+				t.Fatal("timed out waiting for job to start")
+			case <-ticker.C:
+				if s.ActiveJobs.Load() == 1 {
+					found = true
+				}
+			}
+		}
+
+		// 2. Submit another job immediately, should be rejected
+		req2 := httptest.NewRequest("POST", "/async/exec", bytes.NewBuffer(body))
+		rr2 := httptest.NewRecorder()
+		s.AsyncExecHandler(rr2, req2)
+
+		if rr2.Code != http.StatusTooManyRequests {
+			t.Errorf("second job should be rejected with 429, got %d", rr2.Code)
+		}
+
+		// 3. Wait for first job to finish
+		found = false
+		for !found {
+			select {
+			case <-timeout:
+				t.Fatal("timed out waiting for job to finish")
+			case <-ticker.C:
+				if s.ActiveJobs.Load() == 0 {
+					found = true
+				}
+			}
+		}
+
+		// 4. Submit again, should be accepted now
+		req3 := httptest.NewRequest("POST", "/async/exec", bytes.NewBuffer(body))
+		rr3 := httptest.NewRecorder()
+		s.AsyncExecHandler(rr3, req3)
+
+		if rr3.Code != http.StatusAccepted {
+			t.Errorf("job should be accepted after limit cleared, got %d", rr3.Code)
+		}
+	})
+
+	t.Run("VisibleInJobList", func(t *testing.T) {
+		s.ActiveJobs.Store(2)
+		defer s.ActiveJobs.Store(0)
+
+		req := httptest.NewRequest("GET", "/jobs", nil)
+		rr := httptest.NewRecorder()
+
+		s.ListJobsHandler(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("expected 200, got %d", rr.Code)
+		}
+
+		var resp ListJobsResponse
+		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+		if resp.ActiveJobs != 2 {
+			t.Errorf("expected active_jobs 2 in list response, got %d", resp.ActiveJobs)
+		}
+	})
+}
