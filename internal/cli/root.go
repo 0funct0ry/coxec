@@ -151,6 +151,22 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 		enableSync := v.GetBool("server.enable-sync")
 		jobTTL := v.GetDuration("server.job-ttl")
 
+		// Named jobs from config
+		var namedJobs []config.NamedJobConfig
+		if err := v.UnmarshalKey("server.jobs", &namedJobs); err != nil {
+			return fmt.Errorf("failed to parse named jobs from config: %w", err)
+		}
+
+		// Named jobs from CLI flags
+		jobSpecs, _ := cmd.Flags().GetStringArray("job")
+		for _, spec := range jobSpecs {
+			nj, err := parseNamedJob(spec)
+			if err != nil {
+				return err
+			}
+			namedJobs = append(namedJobs, nj)
+		}
+
 		// These flags are still needed for CLI mode or if they are not bound to viper yet
 		executeCmd, _ := cmd.Flags().GetString("execute")
 		fileFlag, _ := cmd.Flags().GetString("file")
@@ -238,7 +254,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 			if loadedConfig != "" {
 				fmt.Fprintf(os.Stderr, "Config loaded from: %s\n", loadedConfig)
 			}
-			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations, maxConcurrentJobs, enableSync, server.NewInMemoryJobStore(), jobTTL)
+			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations, maxConcurrentJobs, enableSync, server.NewInMemoryJobStore(), jobTTL, namedJobs)
 			return s.Start(ctx)
 		}
 
@@ -459,6 +475,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 	cmd.Flags().Int("max-concurrent-jobs", 0, "Maximum number of concurrent jobs (requests) allowed globally")
 	cmd.Flags().Bool("enable-sync", true, "Enable synchronous execution mode")
 	cmd.Flags().Duration("job-ttl", 24*time.Hour, "How long to keep completed/failed/cancelled jobs in memory")
+	cmd.Flags().StringArray("job", nil, "Define a named job (name=... exec=... concurrency=...)")
 
 	// Register built-in client subcommands for help and discovery
 	registry := getBuiltinRegistry()
@@ -568,6 +585,96 @@ func parseRate(s string) (float64, error) {
 	default:
 		return 0, fmt.Errorf("invalid rate unit: %s", parts[1])
 	}
+}
+
+func parseNamedJob(spec string) (config.NamedJobConfig, error) {
+	nj := config.NamedJobConfig{
+		Vars: make(map[string]string),
+	}
+	
+	// Very simple quote-aware space splitter
+	var parts []string
+	var current strings.Builder
+	inQuotes := false
+	quoteChar := rune(0)
+	
+	runes := []rune(spec)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if (r == '"' || r == '\'') && (i == 0 || runes[i-1] != '\\') {
+			if inQuotes {
+				if r == quoteChar {
+					inQuotes = false
+				} else {
+					current.WriteRune(r)
+				}
+			} else {
+				inQuotes = true
+				quoteChar = r
+			}
+		} else if r == ' ' && !inQuotes {
+			if current.Len() > 0 {
+				parts = append(parts, current.String())
+				current.Reset()
+			}
+		} else {
+			current.WriteRune(r)
+		}
+	}
+	if current.Len() > 0 {
+		parts = append(parts, current.String())
+	}
+
+	for _, part := range parts {
+		kv := strings.SplitN(part, "=", 2)
+		if len(kv) != 2 {
+			return nj, fmt.Errorf("invalid job spec part: %s", part)
+		}
+		key, val := kv[0], kv[1]
+		switch key {
+		case "name":
+			nj.Name = val
+		case "exec":
+			nj.Exec = val
+		case "concurrency":
+			v, _ := strconv.Atoi(val)
+			nj.Concurrency = v
+		case "iterations":
+			v, _ := strconv.Atoi(val)
+			nj.Iterations = v
+		case "rate":
+			nj.Rate = val
+		case "timeout":
+			nj.Timeout = val
+		case "delay":
+			nj.Delay = val
+		case "jitter":
+			nj.Jitter = val
+		case "rampup":
+			nj.RampUp = val
+		case "retry":
+			v, _ := strconv.Atoi(val)
+			nj.Retry = v
+		case "label":
+			nj.Label = val
+		default:
+			if strings.HasPrefix(key, "var.") {
+				nj.Vars[strings.TrimPrefix(key, "var.")] = val
+			} else {
+				// Assume it's a variable if not a known key
+				nj.Vars[key] = val
+			}
+		}
+	}
+
+	if nj.Name == "" {
+		return nj, fmt.Errorf("named job missing 'name'")
+	}
+	if nj.Exec == nil {
+		return nj, fmt.Errorf("named job missing 'exec'")
+	}
+
+	return nj, nil
 }
 
 func startTaskGenerator(ctx context.Context, tasks chan<- engine.Task, iterations int, command string, delay, jitter time.Duration, rateLimit float64, verbose bool) {

@@ -18,7 +18,7 @@ import (
 )
 
 func TestHealthCheck(t *testing.T) {
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "", "", "", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "", "", "", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, nil)
 	
 	t.Run("StatusStarting", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/health", nil)
@@ -97,7 +97,7 @@ func TestHealthCheck(t *testing.T) {
 func TestExecHandler(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
 	registry.Register(engine.NewSleepClient())
-	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 0, 0, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 0, 0, 0, true, NewInMemoryJobStore(), 24*time.Hour, nil)
 	s.Status = StatusReady
 
 	t.Run("ValidRequest", func(t *testing.T) {
@@ -374,7 +374,7 @@ func TestExecHandler(t *testing.T) {
 
 func TestExecHandlerWithAuth(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "super-secret", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "super-secret", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, nil)
 	s.Status = StatusReady
 
 	validPayload := ExecRequest{
@@ -436,7 +436,7 @@ func TestExecHandlerWithAuth(t *testing.T) {
 
 func TestExecHandlerWithBasicAuth(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "admin:secret", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "admin:secret", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, nil)
 	s.Status = StatusReady
 
 	validPayload := ExecRequest{
@@ -506,7 +506,7 @@ func TestExecHandlerWithBasicAuth(t *testing.T) {
 
 func TestExecHandlerWithHmac(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
-	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "hmac-secret", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+	s := NewServer("127.0.0.1", 8080, "1.0.0", "", "", "hmac-secret", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, nil)
 	s.Status = StatusReady
 
 	validPayload := ExecRequest{
@@ -584,7 +584,7 @@ func TestStartTLS_MissingFiles(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "nonexistent.cert", "nonexistent.key", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "nonexistent.cert", "nonexistent.key", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, nil)
 	err := s.Start(ctx)
 
 	if err == nil {
@@ -598,7 +598,7 @@ func TestStartTLS_MissingFiles(t *testing.T) {
 func TestAsyncExecHandler(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
 	registry.Register(engine.NewSleepClient())
-	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, nil)
 	s.Status = StatusReady
 
 	t.Run("ValidAsyncRequest", func(t *testing.T) {
@@ -676,7 +676,7 @@ func TestAsyncExecHandler(t *testing.T) {
 func TestJobLifecycle(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
 	registry.Register(engine.NewSleepClient())
-	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, nil)
 	s.Status = StatusReady
 
 	t.Run("FullFlow_Completed", func(t *testing.T) {
@@ -814,7 +814,7 @@ func TestJobCleanup(t *testing.T) {
 
 func TestListJobsHandler(t *testing.T) {
 	newServer := func(authToken string) *Server {
-		s := NewServer("127.0.0.1", 0, "1.0.0", authToken, "", "", "", "", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+		s := NewServer("127.0.0.1", 0, "1.0.0", authToken, "", "", "", "", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, nil)
 		s.Status = StatusReady
 		return s
 	}
@@ -941,7 +941,7 @@ func TestListJobsHandler(t *testing.T) {
 
 	t.Run("TTLFiltering_ExpiredTerminalExcluded_ActiveAlwaysIncluded", func(t *testing.T) {
 		// Server with 1-hour TTL
-		s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore(), 1*time.Hour)
+		s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore(), 1*time.Hour, nil)
 		s.Status = StatusReady
 
 		now := time.Now()
@@ -1116,7 +1116,7 @@ func TestListJobsHandler(t *testing.T) {
 
 func TestGetJobByID(t *testing.T) {
 	newServer := func(authToken string) *Server {
-		s := NewServer("127.0.0.1", 0, "1.0.0", authToken, "", "", "", "", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+		s := NewServer("127.0.0.1", 0, "1.0.0", authToken, "", "", "", "", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, nil)
 		s.Status = StatusReady
 		return s
 	}
@@ -1446,7 +1446,7 @@ func TestGetJobByID(t *testing.T) {
 
 func TestJobCancellation(t *testing.T) {
 	newServer := func(authToken string) *Server {
-		s := NewServer("127.0.0.1", 0, "1.0.0", authToken, "", "", "", "", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+		s := NewServer("127.0.0.1", 0, "1.0.0", authToken, "", "", "", "", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, nil)
 		s.Status = StatusReady
 		return s
 	}
@@ -1513,7 +1513,7 @@ func TestJobCancellation(t *testing.T) {
     t.Run("CancelRunning", func(t *testing.T) {
         registry := engine.NewBuiltinRegistry()
         registry.Register(engine.NewSleepClient())
-        s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+        s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, nil)
         s.Status = StatusReady
 
         payload := ExecRequest{
@@ -1555,7 +1555,7 @@ func TestJobCancellation(t *testing.T) {
 
 func TestJobReportHandler(t *testing.T) {
 	newServer := func() *Server {
-		s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+		s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", engine.NewBuiltinRegistry(), 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, nil)
 		s.Status = StatusReady
 		return s
 	}
@@ -1659,7 +1659,7 @@ func TestJobReportHandler(t *testing.T) {
 func TestJobStreamHandler(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
 	registry.Register(engine.NewSleepClient())
-	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, nil)
 	s.Status = StatusReady
 
 	t.Run("StreamExecutionResults", func(t *testing.T) {
@@ -1724,7 +1724,7 @@ func TestJobStreamHandler(t *testing.T) {
 	})
 
 	t.Run("AuthEnforced", func(t *testing.T) {
-		sAuth := NewServer("127.0.0.1", 0, "1.0.0", "secret-token", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour)
+		sAuth := NewServer("127.0.0.1", 0, "1.0.0", "secret-token", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, nil)
 		sAuth.Status = StatusReady
 
 		req := httptest.NewRequest("GET", "/jobs/some-id/stream", nil)

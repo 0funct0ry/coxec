@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/0funct0ry/coxec/internal/config"
 	"github.com/0funct0ry/coxec/internal/engine"
 )
 
@@ -52,6 +53,7 @@ type Server struct {
 	EnableSync         bool
 	JobStore           JobStore
 	JobTTL             time.Duration
+	NamedJobs          map[string]config.NamedJobConfig
 	jobCancels         map[string]context.CancelFunc
 	jobSubscribers     sync.Map // map[string]*sync.Map (subID -> chan interface{})
 }
@@ -146,7 +148,12 @@ type JobErrorReport struct {
 }
 
 // NewServer creates a new Server instance.
-func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry, defaultConcurrency, defaultIterations int, maxConcurrentJobs int, enableSync bool, jobStore JobStore, jobTTL time.Duration) *Server {
+func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry, defaultConcurrency, defaultIterations int, maxConcurrentJobs int, enableSync bool, jobStore JobStore, jobTTL time.Duration, namedJobs []config.NamedJobConfig) *Server {
+	njMap := make(map[string]config.NamedJobConfig)
+	for _, nj := range namedJobs {
+		njMap[nj.Name] = nj
+	}
+
 	return &Server{
 		Addr:               addr,
 		Port:               port,
@@ -165,6 +172,7 @@ func NewServer(addr string, port int, version string, authToken string, authBasi
 		EnableSync:         enableSync,
 		JobStore:           jobStore,
 		JobTTL:             jobTTL,
+		NamedJobs:          njMap,
 		jobCancels:         make(map[string]context.CancelFunc),
 	}
 }
@@ -177,7 +185,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/exec", s.ExecHandler)
 	mux.HandleFunc("/async/exec", s.AsyncExecHandler)
 	mux.HandleFunc("/jobs", s.ListJobsHandler)   // GET /jobs — list all jobs
-	mux.HandleFunc("/jobs/", s.JobsHandler)       // GET|DELETE /jobs/:id OR GET /jobs/:id/stream
+	mux.HandleFunc("/jobs/", s.handleJobsPath)    // Multiplexer for /jobs/:id and /jobs/:name/run
 
 	srv := &http.Server{
 		Addr:    fullAddr,
@@ -365,6 +373,112 @@ func (s *Server) ExecHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(s.formatReportText(report)))
 }
+func (s *Server) handleJobsPath(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/jobs/")
+	if path == "" {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	// Check if it's a named job trigger: /jobs/:name/run
+	if strings.HasSuffix(path, "/run") && r.Method == http.MethodPost {
+		name := strings.TrimSuffix(path, "/run")
+		s.NamedJobRunHandler(w, r, name)
+		return
+	}
+
+	// Otherwise, it's /jobs/:id related
+	s.JobsHandler(w, r)
+}
+
+func (s *Server) NamedJobRunHandler(w http.ResponseWriter, r *http.Request, name string) {
+	nj, ok := s.NamedJobs[name]
+	if !ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("named job not found: %s", name)})
+		return
+	}
+
+	// Parse overrides from request body
+	var override ExecRequest
+	var bodyBytes []byte
+	if r.Body != nil && r.ContentLength > 0 {
+		rawBytes, _ := io.ReadAll(r.Body)
+		if authErr := s.checkAuth(w, r, rawBytes); authErr != nil {
+			w.WriteHeader(authErr.code)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": authErr.err})
+			return
+		}
+		bodyBytes, _ = makeTemplateExprsJSONSafe(rawBytes)
+		if err := json.Unmarshal(bodyBytes, &override); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid request body overrides"})
+			return
+		}
+	} else {
+		// Even for empty body, check auth (GET-style check if no body)
+		if authErr := s.checkAuth(w, r, nil); authErr != nil {
+			w.WriteHeader(authErr.code)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": authErr.err})
+			return
+		}
+	}
+
+	// Merge named job definition with overrides
+	req := ExecRequest{
+		Exec:        nj.Exec,
+		Concurrency: nj.Concurrency,
+		Iterations:  nj.Iterations,
+		Timeout:     nj.Timeout,
+		Rate:        nj.Rate,
+		Vars:        make(map[string]string),
+		Delay:       nj.Delay,
+		Jitter:      nj.Jitter,
+		RampUp:      nj.RampUp,
+		Label:       nj.Label,
+	}
+
+	// Copy vars from definition
+	for k, v := range nj.Vars {
+		req.Vars[k] = v
+	}
+
+	// Apply overrides
+	if override.Exec != nil {
+		req.Exec = override.Exec
+	}
+	if override.Concurrency > 0 {
+		req.Concurrency = override.Concurrency
+	}
+	if override.Iterations > 0 {
+		req.Iterations = override.Iterations
+	}
+	if override.Timeout != "" {
+		req.Timeout = override.Timeout
+	}
+	if override.Rate != "" {
+		req.Rate = override.Rate
+	}
+	if override.Delay != "" {
+		req.Delay = override.Delay
+	}
+	if override.Jitter != "" {
+		req.Jitter = override.Jitter
+	}
+	if override.RampUp != "" {
+		req.RampUp = override.RampUp
+	}
+	if override.Label != "" {
+		req.Label = override.Label
+	}
+	for k, v := range override.Vars {
+		req.Vars[k] = v
+	}
+
+	// Forward to AsyncExecHandler logic
+	s.runAsyncJob(w, r, req, bodyBytes)
+}
 
 func (s *Server) AsyncExecHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -397,14 +511,20 @@ func (s *Server) AsyncExecHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	req, body, errorRes := s.validateAndParseRequest(w, r)
+	req, bodyBytes, errorRes := s.validateAndParseRequest(w, r)
 	if errorRes != nil {
 		w.WriteHeader(errorRes.code)
 		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: errorRes.err})
 		return
 	}
 
-	execStr, concurrency, iterations, _, err := s.prepareExecPlan(req, body)
+	s.runAsyncJob(w, r, req, bodyBytes)
+}
+
+func (s *Server) runAsyncJob(w http.ResponseWriter, r *http.Request, req ExecRequest, bodyBytes []byte) {
+	idempotencyKey := r.Header.Get("Idempotency-Key")
+	
+	execStr, concurrency, iterations, _, err := s.prepareExecPlan(req, bodyBytes)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: err.Error()})
