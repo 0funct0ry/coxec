@@ -320,3 +320,7 @@ func (s *SQLiteJobStore) SetIdempotencyKey(key string, jobID string) {
 func (s *SQLiteJobStore) Close() error {
 	return s.db.Close()
 }
+
+func (s *SQLiteJobStore) Type() string {
+	return "sqlite"
+}

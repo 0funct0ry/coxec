@@ -152,6 +152,7 @@ curl http://localhost:8080/health
   "status": "ok",
   "version": "1.0.0",
   "active_jobs": 2,
+  "job_store": "memory",
   "uptime_seconds": 3600
 }
 ```

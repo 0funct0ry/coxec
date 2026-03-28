@@ -67,6 +67,9 @@ func TestHealthCheck(t *testing.T) {
 		if int64(resp["active_jobs"].(float64)) != 2 {
 			t.Errorf("expected active_jobs 2, got %v", resp["active_jobs"])
 		}
+		if resp["job_store"] != "memory" {
+			t.Errorf("expected job_store 'memory', got '%s'", resp["job_store"])
+		}
 		if int64(resp["uptime_seconds"].(float64)) < 3600 {
 			t.Errorf("expected uptime >= 3600, got %v", resp["uptime_seconds"])
 		}

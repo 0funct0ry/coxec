@@ -202,7 +202,7 @@ func (s *Server) Start(ctx context.Context) error {
 		if useTLS {
 			protocol = "https"
 		}
-		fmt.Printf("coxec server listening on %s (%s)\n", fullAddr, protocol)
+		fmt.Printf("coxec server listening on %s (%s) [store: %s]\n", fullAddr, protocol, s.JobStore.Type())
 		s.mu.Lock()
 		s.Status = StatusReady
 		s.mu.Unlock()
@@ -267,6 +267,7 @@ func (s *Server) HealthHandler(w http.ResponseWriter, r *http.Request) {
 		"status":         "ok",
 		"version":        s.Version,
 		"active_jobs":    s.ActiveJobs.Load(),
+		"job_store":      s.JobStore.Type(),
 		"uptime_seconds": int64(time.Since(s.StartTime).Seconds()),
 	})
 }

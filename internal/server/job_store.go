@@ -62,6 +62,9 @@ type JobStore interface {
 	// Idempotency support
 	GetByIdempotencyKey(key string) (string, bool)
 	SetIdempotencyKey(key string, jobID string)
+
+	// Type returns the name of the store type (e.g., "memory", "sqlite", "redis").
+	Type() string
 }
 
 // InMemoryJobStore implements JobStore using an in-memory map.
@@ -264,4 +267,8 @@ func (s *InMemoryJobStore) SetIdempotencyKey(key string, jobID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.idempotencyMap[key] = jobID
+}
+
+func (s *InMemoryJobStore) Type() string {
+	return "memory"
 }

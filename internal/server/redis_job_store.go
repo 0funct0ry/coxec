@@ -326,3 +326,7 @@ func (s *RedisJobStore) unmarshalJob(id string, data map[string]string) (*Job, e
 func (s *RedisJobStore) Close() error {
 	return s.client.Close()
 }
+
+func (s *RedisJobStore) Type() string {
+	return "redis"
+}
