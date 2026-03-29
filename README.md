@@ -378,6 +378,24 @@ Monitor and control asynchronous jobs using the `/jobs` endpoint:
   }
   ```
 
+- **Webhook Deliveries**: Automatically POST common details about completed jobs to an external URL. 
+
+  ```bash
+  curl -X POST http://localhost:8080/async/exec \
+    -d '{
+      "exec": ".sleep 1s",
+      "callback_url": "https://my-ci.example.com/webhooks/coxec",
+      "callback_headers": {
+        "X-Secret": "my-shared-secret"
+      }
+    }'
+  ```
+
+  The server will send a JSON POST request to the `callback_url` when the job finishes (terminal state). The payload is identical to the `GET /jobs/:id` response. Delivery features include:
+  - **Automatic Retries**: Retries delivery up to `COXEC_SERVER_CALLBACK_RETRY` times (default: 3) with exponential backoff.
+  - **CIDR Allow-list**: Restrict callback URLs to specific network ranges for security using `--callback-allow-list`.
+  - **Custom Headers**: Pass authentication tokens or correlation IDs via `callback_headers`.
+
 
 #### Supported Fields
 - `exec`: (Required) The command string to execute.
@@ -428,6 +446,10 @@ The endpoint returns `400 Bad Request` for invalid payloads (e.g. non-positive v
 - `--job-history int`: Maximum number of completed jobs to retain (default: `1000`).
 - `--job-store string`: Job store backend: `memory` (default), `sqlite`, or `redis`.
 - `--job-store-dsn string`: Data source name for the job store (e.g., `./coxec-jobs.db` or `redis://localhost:6379/0`).
+- `-W, --enable-webhooks`: Enable background webhook delivery (default: `false`).
+- `-T, --callback-timeout duration`: Timeout for webhook HTTP requests (default: `10s`).
+- `-R, --callback-retry int`: Number of delivery retries with exponential backoff (default: `3`).
+- `-L, --callback-allow-list strings`: CIDR ranges allowed for callback URLs (e.g., `10.0.0.0/8,192.168.1.0/24`).
 - `-c, --concurrency int`: Number of concurrent workers. (default: `1`)
 - `-n, --iterations int`: Total number of executions (defaults to `--concurrency`).
 - `--rate string`: Maximum execution rate (e.g., `50/s`, `10/m`, `1/h`).

@@ -29,6 +29,10 @@ type ServerConfig struct {
 	JobStore           string           `mapstructure:"job-store"`
 	JobStoreDSN        string           `mapstructure:"job-store-dsn"`
 	TLS                TLSConfig        `mapstructure:"tls"`
+	EnableWebhooks     bool             `mapstructure:"enable-webhooks"`
+	CallbackTimeout    string           `mapstructure:"callback-timeout"`
+	CallbackRetry      int              `mapstructure:"callback-retry"`
+	CallbackAllowList  []string         `mapstructure:"callback-allow-list"`
 	Jobs               []NamedJobConfig `mapstructure:"jobs"`
 }
 

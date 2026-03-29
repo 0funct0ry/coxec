@@ -10,8 +10,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math/rand/v2"
+	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -54,6 +57,10 @@ type Server struct {
 	JobStore           JobStore
 	JobTTL             time.Duration
 	JobHistory         int
+	EnableWebhooks     bool
+	CallbackTimeout    time.Duration
+	CallbackRetry      int
+	CallbackAllowList  []string
 	NamedJobs          map[string]config.NamedJobConfig
 	jobCancels         map[string]context.CancelFunc
 	jobSubscribers     sync.Map // map[string]*sync.Map (subID -> chan interface{})
@@ -72,6 +79,8 @@ type ExecRequest struct {
 	RampUp      string            `json:"rampup,omitempty"`
 	Verbose     bool              `json:"verbose,omitempty"`
 	Label       string            `json:"label,omitempty"`
+	CallbackURL string            `json:"callback_url,omitempty"`
+	CallbackHeaders map[string]string `json:"callback_headers,omitempty"`
 }
 
 // ExecResponse defines the response for POST /exec
@@ -150,7 +159,7 @@ type JobErrorReport struct {
 }
 
 // NewServer creates a new Server instance.
-func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry, defaultConcurrency, defaultIterations int, maxConcurrentJobs int, enableSync bool, jobStore JobStore, jobTTL time.Duration, jobHistory int, namedJobs []config.NamedJobConfig) *Server {
+func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry, defaultConcurrency, defaultIterations int, maxConcurrentJobs int, enableSync bool, jobStore JobStore, jobTTL time.Duration, jobHistory int, enableWebhooks bool, callbackTimeout time.Duration, callbackRetry int, callbackAllowList []string, namedJobs []config.NamedJobConfig) *Server {
 	njMap := make(map[string]config.NamedJobConfig)
 	for _, nj := range namedJobs {
 		njMap[nj.Name] = nj
@@ -175,6 +184,10 @@ func NewServer(addr string, port int, version string, authToken string, authBasi
 		JobStore:           jobStore,
 		JobTTL:             jobTTL,
 		JobHistory:         jobHistory,
+		EnableWebhooks:     enableWebhooks,
+		CallbackTimeout:    callbackTimeout,
+		CallbackRetry:      callbackRetry,
+		CallbackAllowList:  callbackAllowList,
 		NamedJobs:          njMap,
 		jobCancels:         make(map[string]context.CancelFunc),
 	}
@@ -570,6 +583,14 @@ func (s *Server) runAsyncJob(w http.ResponseWriter, r *http.Request, req ExecReq
 		s.JobStore.SetIdempotencyKey(idempotencyKey, jobID)
 	}
 
+	if req.CallbackURL != "" {
+		if err := s.validateCallbackURL(req.CallbackURL); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: fmt.Sprintf("invalid callback URL: %v", err)})
+			return
+		}
+	}
+
 	// Start background execution
 	go func() {
 		s.ActiveJobs.Add(1)
@@ -649,6 +670,10 @@ func (s *Server) runAsyncJob(w http.ResponseWriter, r *http.Request, req ExecReq
 			"data": jobToDetail(job),
 		})
 		s.closeSubscribers(jobID)
+
+		if s.EnableWebhooks && job.Request.CallbackURL != "" {
+			go s.sendWebhook(job)
+		}
 	}()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1551,4 +1576,99 @@ func (s *Server) formatReportText(report *engine.ExecutionReport) string {
 	}
 
 	return sb.String()
+}
+func (s *Server) validateCallbackURL(callbackURL string) error {
+	u, err := url.Parse(callbackURL)
+	if err != nil {
+		return err
+	}
+
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("unsupported scheme: %s", u.Scheme)
+	}
+
+	if len(s.CallbackAllowList) == 0 {
+		return nil
+	}
+
+	host := u.Hostname()
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return fmt.Errorf("failed to lookup host %s: %v", host, err)
+	}
+
+	for _, ip := range ips {
+		allowed := false
+		for _, allowCIDR := range s.CallbackAllowList {
+			_, cidr, err := net.ParseCIDR(allowCIDR)
+			if err != nil {
+				// Should have been validated on startup, but handle just in case
+				continue
+			}
+			if cidr.Contains(ip) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return fmt.Errorf("callback IP %s is not in the allow-list", ip.String())
+		}
+	}
+
+	return nil
+}
+
+func (s *Server) sendWebhook(job *Job) {
+	payload := jobToDetail(job)
+	data, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("[WEBHOOK] [%s] Failed to marshal payload: %v", job.ID, err)
+		return
+	}
+
+	maxRetries := s.CallbackRetry
+	if maxRetries < 0 {
+		maxRetries = 0
+	}
+
+	for i := 0; i <= maxRetries; i++ {
+		if i > 0 {
+			// Exponential backoff: 2s, 4s, 8s...
+			backoff := time.Duration(1<<uint(i)) * time.Second
+			time.Sleep(backoff)
+			log.Printf("[WEBHOOK] [%s] Retrying delivery (attempt %d/%d)...", job.ID, i, maxRetries)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), s.CallbackTimeout)
+		req, err := http.NewRequestWithContext(ctx, "POST", job.Request.CallbackURL, bytes.NewBuffer(data))
+		if err != nil {
+			cancel()
+			log.Printf("[WEBHOOK] [%s] Failed to create request: %v", job.ID, err)
+			return
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "coxec/"+s.Version)
+		for k, v := range job.Request.CallbackHeaders {
+			req.Header.Set(k, v)
+		}
+
+		resp, err := http.DefaultClient.Do(req)
+		cancel()
+
+		if err != nil {
+			log.Printf("[WEBHOOK] [%s] Delivery failed: %v", job.ID, err)
+			continue
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			log.Printf("[WEBHOOK] [%s] Successfully delivered to %s (status %d)", job.ID, job.Request.CallbackURL, resp.StatusCode)
+			return
+		}
+
+		log.Printf("[WEBHOOK] [%s] Delivery failed with status %d", job.ID, resp.StatusCode)
+	}
+
+	log.Printf("[WEBHOOK] [%s] Giving up after %d attempts", job.ID, maxRetries+1)
 }

@@ -135,6 +135,10 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 		v.BindPFlag("server.job-history", cmd.Flags().Lookup("job-history"))
 		v.BindPFlag("server.job-store", cmd.Flags().Lookup("job-store"))
 		v.BindPFlag("server.job-store-dsn", cmd.Flags().Lookup("job-store-dsn"))
+		v.BindPFlag("server.enable-webhooks", cmd.Flags().Lookup("enable-webhooks"))
+		v.BindPFlag("server.callback-timeout", cmd.Flags().Lookup("callback-timeout"))
+		v.BindPFlag("server.callback-retry", cmd.Flags().Lookup("callback-retry"))
+		v.BindPFlag("server.callback-allow-list", cmd.Flags().Lookup("callback-allow-list"))
 
 		loadedConfig, err := config.LoadConfig(v, configPath)
 		if err != nil {
@@ -156,6 +160,10 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 		jobHistory := v.GetInt("server.job-history")
 		jobStoreType := v.GetString("server.job-store")
 		jobStoreDSN := v.GetString("server.job-store-dsn")
+		enableWebhooks := v.GetBool("server.enable-webhooks")
+		callbackTimeout := v.GetDuration("server.callback-timeout")
+		callbackRetry := v.GetInt("server.callback-retry")
+		callbackAllowList := v.GetStringSlice("server.callback-allow-list")
 
 		// Named jobs from config (try multiple locations for flexibility)
 		var namedJobs []config.NamedJobConfig
@@ -307,7 +315,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 				}
 			}
 
-			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations, maxConcurrentJobs, enableSync, js, jobTTL, jobHistory, namedJobs)
+			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations, maxConcurrentJobs, enableSync, js, jobTTL, jobHistory, enableWebhooks, callbackTimeout, callbackRetry, callbackAllowList, namedJobs)
 			return s.Start(ctx)
 		}
 
@@ -531,6 +539,10 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 	cmd.Flags().Int("job-history", 1000, "Maximum number of completed jobs to retain in memory")
 	cmd.Flags().String("job-store", "memory", "Job store backend (memory, sqlite, redis)")
 	cmd.Flags().String("job-store-dsn", "", "Data source name for the job store (e.g. ./coxec-jobs.db)")
+	cmd.Flags().BoolP("enable-webhooks", "W", false, "Enable webhook notifications on job completion")
+	cmd.Flags().DurationP("callback-timeout", "T", 10*time.Second, "Maximum duration for each webhook delivery attempt")
+	cmd.Flags().IntP("callback-retry", "R", 3, "Number of retries for failed webhook deliveries")
+	cmd.Flags().StringSliceP("callback-allow-list", "L", []string{}, "CIDR ranges allowed for callback URLs (comma-separated, empty for unrestricted)")
 	cmd.Flags().StringArray("job", nil, "Define a named job (name=... exec=... concurrency=...)")
 
 	// Register built-in client subcommands for help and discovery
