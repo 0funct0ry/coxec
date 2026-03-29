@@ -32,7 +32,7 @@ func TestWebhookDelivery(t *testing.T) {
 
 	registry := engine.NewBuiltinRegistry()
 	// Disable real execution in this test, just enough to trigger the flow
-	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, 1000, true, 1*time.Second, 1, nil, false, false, 0, 0, nil)
+	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, true, NewInMemoryJobStore(), 24*time.Hour, 1000, true, 1*time.Second, 1, nil, false, false, 0, 0, nil)
 	s.Status = StatusReady
 
 	t.Run("SuccessfulDelivery", func(t *testing.T) {
@@ -70,7 +70,7 @@ func TestWebhookDelivery(t *testing.T) {
 		}))
 		defer tsRetry.Close()
 
-		sRetry := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, 1000, true, 1*time.Second, 2, nil, false, false, 0, 0, nil)
+		sRetry := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, true, NewInMemoryJobStore(), 24*time.Hour, 1000, true, 1*time.Second, 2, nil, false, false, 0, 0, nil)
 		
 		job := &Job{
 			ID:     "retry-job",

@@ -56,6 +56,7 @@ type Server struct {
 	DefaultIterations  int
 	MaxConcurrentJobs  int
 	EnableSync         bool
+	EnableAsync        bool
 	JobStore           JobStore
 	JobTTL             time.Duration
 	JobHistory         int
@@ -166,7 +167,7 @@ type JobErrorReport struct {
 }
 
 // NewServer creates a new Server instance.
-func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry, defaultConcurrency, defaultIterations int, maxConcurrentJobs int, enableSync bool, jobStore JobStore, jobTTL time.Duration, jobHistory int, enableWebhooks bool, callbackTimeout time.Duration, callbackRetry int, callbackAllowList []string, callbackAllowInsecure bool, enableWS bool, wsPingInterval time.Duration, wsMaxClients int, namedJobs []config.NamedJobConfig) *Server {
+func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry, defaultConcurrency, defaultIterations int, maxConcurrentJobs int, enableSync bool, enableAsync bool, jobStore JobStore, jobTTL time.Duration, jobHistory int, enableWebhooks bool, callbackTimeout time.Duration, callbackRetry int, callbackAllowList []string, callbackAllowInsecure bool, enableWS bool, wsPingInterval time.Duration, wsMaxClients int, namedJobs []config.NamedJobConfig) *Server {
 	njMap := make(map[string]config.NamedJobConfig)
 	for _, nj := range namedJobs {
 		njMap[nj.Name] = nj
@@ -188,6 +189,7 @@ func NewServer(addr string, port int, version string, authToken string, authBasi
 		DefaultIterations:  defaultIterations,
 		MaxConcurrentJobs:  maxConcurrentJobs,
 		EnableSync:         enableSync,
+		EnableAsync:        enableAsync,
 		JobStore:           jobStore,
 		JobTTL:             jobTTL,
 		JobHistory:         jobHistory,
@@ -319,6 +321,12 @@ func (s *Server) HealthHandler(w http.ResponseWriter, r *http.Request) {
 		"active_jobs":    s.ActiveJobs.Load(),
 		"job_store":      s.JobStore.Type(),
 		"uptime_seconds": int64(time.Since(s.StartTime).Seconds()),
+		"features": map[string]bool{
+			"sync":     s.EnableSync,
+			"async":    s.EnableAsync,
+			"webhooks": s.EnableWebhooks,
+			"ws":       s.EnableWS,
+		},
 		"websocket": map[string]interface{}{
 			"enabled":        s.EnableWS,
 			"active_clients": s.activeWSClients.Load(),
@@ -371,6 +379,12 @@ func (s *Server) ExecHandler(w http.ResponseWriter, r *http.Request) {
 	if currentStatus != StatusReady {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "server is not ready"})
+		return
+	}
+
+	if !s.EnableSync {
+		w.WriteHeader(http.StatusNotImplemented)
+		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "synchronous execution is disabled on this server"})
 		return
 	}
 
@@ -464,6 +478,12 @@ func (s *Server) handleJobsPath(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/jobs/")
 	if path == "" {
 		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	if !s.EnableAsync {
+		w.WriteHeader(http.StatusNotImplemented)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "asynchronous execution is disabled on this server"})
 		return
 	}
 
@@ -584,6 +604,12 @@ func (s *Server) AsyncExecHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !s.EnableAsync {
+		w.WriteHeader(http.StatusNotImplemented)
+		_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "asynchronous execution is disabled on this server"})
+		return
+	}
+
 	// Idempotency check is now handled in runAsyncJob which is called by runAsyncJob via AsyncExecHandler and NamedJobRunHandler
 
 	req, bodyBytes, errorRes := s.validateAndParseRequest(w, r)
@@ -643,7 +669,7 @@ func (s *Server) runAsyncJob(w http.ResponseWriter, r *http.Request, req ExecReq
 
 	if req.CallbackURL != "" {
 		if !s.EnableWebhooks {
-			w.WriteHeader(http.StatusBadRequest)
+			w.WriteHeader(http.StatusNotImplemented)
 			_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "webhooks are disabled on this server"})
 			return
 		}
@@ -1213,6 +1239,11 @@ func jobToSummary(job *Job) *JobSummary {
 
 // ListJobsHandler handles GET /jobs — returns a paginated, sorted list of job summaries.
 func (s *Server) ListJobsHandler(w http.ResponseWriter, r *http.Request) {
+	if !s.EnableAsync {
+		w.WriteHeader(http.StatusNotImplemented)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "asynchronous execution is disabled on this server"})
+		return
+	}
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})

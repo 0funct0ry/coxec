@@ -24,6 +24,7 @@ type ServerConfig struct {
 	DefaultConcurrency int              `mapstructure:"default-concurrency"`
 	DefaultIterations  int              `mapstructure:"default-iterations"`
 	EnableSync         bool             `mapstructure:"enable-sync"`
+	EnableAsync        bool             `mapstructure:"enable-async"`
 	JobHistory         int              `mapstructure:"job-history"`
 	JobTTL             string           `mapstructure:"job-ttl"`
 	JobStore           string           `mapstructure:"job-store"`

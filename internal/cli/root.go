@@ -131,6 +131,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 		v.BindPFlag("server.default-iterations", cmd.Flags().Lookup("iterations"))
 		v.BindPFlag("server.max-concurrent-jobs", cmd.Flags().Lookup("max-concurrent-jobs"))
 		v.BindPFlag("server.enable-sync", cmd.Flags().Lookup("enable-sync"))
+		v.BindPFlag("server.enable-async", cmd.Flags().Lookup("enable-async"))
 		v.BindPFlag("server.job-ttl", cmd.Flags().Lookup("job-ttl"))
 		v.BindPFlag("server.job-history", cmd.Flags().Lookup("job-history"))
 		v.BindPFlag("server.job-store", cmd.Flags().Lookup("job-store"))
@@ -160,6 +161,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 		iterations := v.GetInt("server.default-iterations")
 		maxConcurrentJobs := v.GetInt("server.max-concurrent-jobs")
 		enableSync := v.GetBool("server.enable-sync")
+		enableAsync := v.GetBool("server.enable-async")
 		jobTTL := v.GetDuration("server.job-ttl")
 		jobHistory := v.GetInt("server.job-history")
 		jobStoreType := v.GetString("server.job-store")
@@ -323,7 +325,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 				}
 			}
 
-			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations, maxConcurrentJobs, enableSync, js, jobTTL, jobHistory, enableWebhooks, callbackTimeout, callbackRetry, callbackAllowList, callbackAllowInsecure, enableWS, wsPingInterval, wsMaxClients, namedJobs)
+			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations, maxConcurrentJobs, enableSync, enableAsync, js, jobTTL, jobHistory, enableWebhooks, callbackTimeout, callbackRetry, callbackAllowList, callbackAllowInsecure, enableWS, wsPingInterval, wsMaxClients, namedJobs)
 			return s.Start(ctx)
 		}
 
@@ -543,6 +545,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 	cmd.Flags().String("config", "", "Path to configuration file")
 	cmd.Flags().Int("max-concurrent-jobs", 0, "Maximum number of concurrent jobs (requests) allowed globally")
 	cmd.Flags().Bool("enable-sync", true, "Enable synchronous execution mode")
+	cmd.Flags().Bool("enable-async", true, "Enable asynchronous execution mode")
 	cmd.Flags().Duration("job-ttl", 24*time.Hour, "How long to keep completed/failed/cancelled jobs in memory")
 	cmd.Flags().Int("job-history", 1000, "Maximum number of completed jobs to retain in memory")
 	cmd.Flags().String("job-store", "memory", "Job store backend (memory, sqlite, redis)")

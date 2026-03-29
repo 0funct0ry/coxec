@@ -33,7 +33,7 @@ func TestNamedJobTriggering(t *testing.T) {
 		},
 	}
 
-	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, 1000, false, 10*time.Second, 3, nil, false, false, 0, 0, namedJobs)
+	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, true, NewInMemoryJobStore(), 24*time.Hour, 1000, false, 10*time.Second, 3, nil, false, false, 0, 0, namedJobs)
 	s.Status = StatusReady
 
 	t.Run("TriggerKnownJob", func(t *testing.T) {

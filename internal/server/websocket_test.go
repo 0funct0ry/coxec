@@ -15,7 +15,7 @@ import (
 func TestWebsocketHandler(t *testing.T) {
 	registry := engine.NewBuiltinRegistry()
 	// Using 25 parameters as per the updated NewServer signature
-	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, 1000, false, 100*time.Millisecond, 2, nil, false, true, 100*time.Millisecond, 2, nil)
+	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, true, NewInMemoryJobStore(), 24*time.Hour, 1000, false, 100*time.Millisecond, 2, nil, false, true, 100*time.Millisecond, 2, nil)
 	s.Status = StatusReady
 
 	server := httptest.NewServer(http.HandlerFunc(s.WebsocketHandler))
@@ -135,7 +135,7 @@ func TestWebsocketHandler(t *testing.T) {
 	})
 
 	t.Run("AuthRequired", func(t *testing.T) {
-		sAuth := NewServer("127.0.0.1", 0, "1.0.0", "secret", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, 1000, false, 100*time.Millisecond, 2, nil, false, true, 100*time.Millisecond, 2, nil)
+		sAuth := NewServer("127.0.0.1", 0, "1.0.0", "secret", "", "", "", "", registry, 1, 1, 0, true, true, NewInMemoryJobStore(), 24*time.Hour, 1000, false, 100*time.Millisecond, 2, nil, false, true, 100*time.Millisecond, 2, nil)
 		sAuth.Status = StatusReady
 		serverAuth := httptest.NewServer(http.HandlerFunc(sAuth.WebsocketHandler))
 		defer serverAuth.Close()

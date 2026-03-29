@@ -123,6 +123,9 @@ server:
   default-concurrency: 5
   default-iterations: 10
   enable-sync: true
+  enable-async: true
+  enable-webhooks: false
+  enable-ws: false
   tls:
     cert: cert.pem
     key: key.pem
@@ -153,7 +156,13 @@ curl http://localhost:8080/health
   "version": "1.0.0",
   "active_jobs": 2,
   "job_store": "memory",
-  "uptime_seconds": 3600
+  "uptime_seconds": 3600,
+  "features": {
+    "sync": true,
+    "async": true,
+    "webhooks": false,
+    "ws": false
+  }
 }
 ```
 
@@ -456,6 +465,7 @@ The endpoint returns `400 Bad Request` for invalid payloads (e.g. non-positive v
 - `--config string`: Path to configuration file (e.g., `coxec.yaml`).
 - `--max-concurrent-jobs int`: Maximum number of concurrent jobs (requests) allowed globally.
 - `--enable-sync bool`: Enable synchronous execution mode (default: `true`).
+- `--enable-async bool`: Enable asynchronous execution mode (default: `true`).
 - `--job-ttl duration`: Time to retain finished jobs in memory or disk (default: `24h`).
 - `--job-history int`: Maximum number of completed jobs to retain (default: `1000`).
 - `--job-store string`: Job store backend: `memory` (default), `sqlite`, or `redis`.
