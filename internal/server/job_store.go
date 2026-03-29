@@ -17,6 +17,7 @@ const (
 	JobStatusCompleted JobStatus = "completed"
 	JobStatusFailed    JobStatus = "failed"
 	JobStatusCancelled JobStatus = "cancelled"
+	JobStatusCancelling JobStatus = "cancelling"
 )
 
 // Job represents an asynchronous execution job.
@@ -121,7 +122,7 @@ func (s *InMemoryJobStore) List(filter ListFilter) ([]*Job, int, error) {
 	matched := make([]*Job, 0, len(s.jobs))
 	for _, job := range s.jobs {
 		// Active jobs are always included.
-		if job.Status == JobStatusQueued || job.Status == JobStatusRunning {
+		if job.Status == JobStatusQueued || job.Status == JobStatusRunning || job.Status == JobStatusCancelling {
 			matched = append(matched, job.Clone())
 			continue
 		}

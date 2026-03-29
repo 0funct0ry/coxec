@@ -140,6 +140,9 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 		v.BindPFlag("server.callback-retry", cmd.Flags().Lookup("callback-retry"))
 		v.BindPFlag("server.callback-allow-list", cmd.Flags().Lookup("callback-allow-list"))
 		v.BindPFlag("server.callback-allow-insecure", cmd.Flags().Lookup("callback-allow-insecure"))
+		v.BindPFlag("server.enable-ws", cmd.Flags().Lookup("enable-ws"))
+		v.BindPFlag("server.ws-ping-interval", cmd.Flags().Lookup("ws-ping-interval"))
+		v.BindPFlag("server.ws-max-clients", cmd.Flags().Lookup("ws-max-clients"))
 
 		loadedConfig, err := config.LoadConfig(v, configPath)
 		if err != nil {
@@ -166,6 +169,9 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 		callbackRetry := v.GetInt("server.callback-retry")
 		callbackAllowList := v.GetStringSlice("server.callback-allow-list")
 		callbackAllowInsecure := v.GetBool("server.callback-allow-insecure")
+		enableWS := v.GetBool("server.enable-ws")
+		wsPingInterval := v.GetDuration("server.ws-ping-interval")
+		wsMaxClients := v.GetInt("server.ws-max-clients")
 
 		// Named jobs from config (try multiple locations for flexibility)
 		var namedJobs []config.NamedJobConfig
@@ -317,7 +323,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 				}
 			}
 
-			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations, maxConcurrentJobs, enableSync, js, jobTTL, jobHistory, enableWebhooks, callbackTimeout, callbackRetry, callbackAllowList, callbackAllowInsecure, namedJobs)
+			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations, maxConcurrentJobs, enableSync, js, jobTTL, jobHistory, enableWebhooks, callbackTimeout, callbackRetry, callbackAllowList, callbackAllowInsecure, enableWS, wsPingInterval, wsMaxClients, namedJobs)
 			return s.Start(ctx)
 		}
 
@@ -546,6 +552,9 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 	cmd.Flags().IntP("callback-retry", "R", 3, "Number of retries for failed webhook deliveries")
 	cmd.Flags().StringSliceP("callback-allow-list", "L", []string{}, "CIDR ranges allowed for callback URLs (comma-separated, empty for unrestricted)")
 	cmd.Flags().BoolP("callback-allow-insecure", "k", false, "Allow HTTP callback URLs even when no allow-list is provided (local testing only)")
+	cmd.Flags().BoolP("enable-ws", "w", false, "Enable WebSocket interactive sessions")
+	cmd.Flags().DurationP("ws-ping-interval", "i", 30*time.Second, "Interval between server pings to WebSocket clients")
+	cmd.Flags().IntP("ws-max-clients", "M", 50, "Maximum concurrent WebSocket connections")
 	cmd.Flags().StringArray("job", nil, "Define a named job (name=... exec=... concurrency=...)")
 
 	// Register built-in client subcommands for help and discovery

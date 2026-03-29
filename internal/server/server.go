@@ -25,6 +25,7 @@ import (
 
 	"github.com/0funct0ry/coxec/internal/config"
 	"github.com/0funct0ry/coxec/internal/engine"
+	"github.com/gorilla/websocket"
 )
 
 // ServerStatus represents the current lifecycle state of the server.
@@ -59,6 +60,10 @@ type Server struct {
 	JobTTL             time.Duration
 	JobHistory         int
 	EnableWebhooks     bool
+	EnableWS           bool
+	WSPingInterval     time.Duration
+	WSMaxClients       int
+	activeWSClients    atomic.Int32
 	CallbackTimeout    time.Duration
 	CallbackRetry      int
 	CallbackAllowList  []string
@@ -161,7 +166,7 @@ type JobErrorReport struct {
 }
 
 // NewServer creates a new Server instance.
-func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry, defaultConcurrency, defaultIterations int, maxConcurrentJobs int, enableSync bool, jobStore JobStore, jobTTL time.Duration, jobHistory int, enableWebhooks bool, callbackTimeout time.Duration, callbackRetry int, callbackAllowList []string, callbackAllowInsecure bool, namedJobs []config.NamedJobConfig) *Server {
+func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry, defaultConcurrency, defaultIterations int, maxConcurrentJobs int, enableSync bool, jobStore JobStore, jobTTL time.Duration, jobHistory int, enableWebhooks bool, callbackTimeout time.Duration, callbackRetry int, callbackAllowList []string, callbackAllowInsecure bool, enableWS bool, wsPingInterval time.Duration, wsMaxClients int, namedJobs []config.NamedJobConfig) *Server {
 	njMap := make(map[string]config.NamedJobConfig)
 	for _, nj := range namedJobs {
 		njMap[nj.Name] = nj
@@ -191,6 +196,9 @@ func NewServer(addr string, port int, version string, authToken string, authBasi
 		CallbackRetry:      callbackRetry,
 		CallbackAllowList:  callbackAllowList,
 		CallbackAllowInsecure: callbackAllowInsecure,
+		EnableWS:           enableWS,
+		WSPingInterval:     wsPingInterval,
+		WSMaxClients:       wsMaxClients,
 		NamedJobs:          njMap,
 		jobCancels:         make(map[string]context.CancelFunc),
 	}
@@ -223,6 +231,14 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/async/exec", s.AsyncExecHandler)
 	mux.HandleFunc("/jobs", s.ListJobsHandler)   // GET /jobs — list all jobs
 	mux.HandleFunc("/jobs/", s.handleJobsPath)    // Multiplexer for /jobs/:id and /jobs/:name/run
+	if s.EnableWS {
+		mux.HandleFunc("/ws", s.WebsocketHandler)
+	} else {
+		mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotImplemented)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "WebSocket support is disabled"})
+		})
+	}
 
 	srv := &http.Server{
 		Addr:    fullAddr,
@@ -303,6 +319,11 @@ func (s *Server) HealthHandler(w http.ResponseWriter, r *http.Request) {
 		"active_jobs":    s.ActiveJobs.Load(),
 		"job_store":      s.JobStore.Type(),
 		"uptime_seconds": int64(time.Since(s.StartTime).Seconds()),
+		"websocket": map[string]interface{}{
+			"enabled":        s.EnableWS,
+			"active_clients": s.activeWSClients.Load(),
+			"max_clients":    s.WSMaxClients,
+		},
 	}
 
 	if s.EnableWebhooks {
@@ -767,48 +788,55 @@ func (s *Server) JobsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		job, ok := s.JobStore.Get(id)
-		if !ok {
-			w.WriteHeader(http.StatusNotFound)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "job not found"})
+		status, err := s.cancelJobInternal(id)
+		if err != nil {
+			if err.Error() == "job not found" {
+				w.WriteHeader(http.StatusNotFound)
+			} else {
+				w.WriteHeader(http.StatusConflict)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
-
-		// Conflict if job is already terminal
-		if job.Status == JobStatusCompleted || job.Status == JobStatusFailed || job.Status == JobStatusCancelled {
-			w.WriteHeader(http.StatusConflict)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("cannot cancel job in terminal state: %s", job.Status)})
-			return
-		}
-
-		s.mu.Lock()
-		cancel, running := s.jobCancels[id]
-		s.mu.Unlock()
-
-		if running {
-			cancel()
-			// Update status immediately for better UX, though the background goroutine will also do it
-			job.Status = JobStatusCancelled
-			now := time.Now()
-			job.CompletedAt = &now
-			_ = s.JobStore.Update(job)
-			w.WriteHeader(http.StatusAccepted)
-		} else if job.Status == JobStatusQueued {
-			// Job is queued but not yet in jobCancels (about to start)
-			job.Status = JobStatusCancelled
-			now := time.Now()
-			job.CompletedAt = &now
-			_ = s.JobStore.Update(job)
-			w.WriteHeader(http.StatusAccepted)
-		} else {
-			// Fallback for any other state
-			w.WriteHeader(http.StatusOK)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": string(job.Status)})
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": status})
 
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+// cancelJobInternal stops a running or queued job.
+func (s *Server) cancelJobInternal(id string) (string, error) {
+	job, ok := s.JobStore.Get(id)
+	if !ok {
+		return "", fmt.Errorf("job not found")
+	}
+
+	// Conflict if job is already terminal
+	if job.Status == JobStatusCompleted || job.Status == JobStatusFailed || job.Status == JobStatusCancelled {
+		return "", fmt.Errorf("cannot cancel job in terminal state: %s", job.Status)
+	}
+
+	s.mu.Lock()
+	cancel, running := s.jobCancels[id]
+	s.mu.Unlock()
+
+	if running {
+		cancel()
+		// Update status immediately
+		job.Status = JobStatusCancelled
+		now := time.Now()
+		job.CompletedAt = &now
+		_ = s.JobStore.Update(job)
+	} else if job.Status == JobStatusQueued {
+		// Job is queued but not yet in jobCancels
+		job.Status = JobStatusCancelled
+		now := time.Now()
+		job.CompletedAt = &now
+		_ = s.JobStore.Update(job)
+	}
+	return string(job.Status), nil
 }
 
 // jobToDetail converts a Job into the rich JobDetailResponse for GET /jobs/:id.
@@ -1716,4 +1744,111 @@ func (s *Server) sendWebhook(job *Job) {
 	}
 
 	log.Printf("[WEBHOOK] [%s] Giving up after %d attempts", job.ID, maxRetries+1)
+}
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true // Allow all origins for dev, can be tightened later if needed
+	},
+}
+
+// WebsocketHandler handles bidirectional job monitoring and control.
+func (s *Server) WebsocketHandler(w http.ResponseWriter, r *http.Request) {
+	if authErr := s.checkAuth(w, r, nil); authErr != nil {
+		w.WriteHeader(authErr.code)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": authErr.err})
+		return
+	}
+
+	if !s.EnableWS {
+		w.WriteHeader(http.StatusNotImplemented)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "WebSocket support is disabled"})
+		return
+	}
+
+	jobID := r.URL.Query().Get("job_id")
+	if jobID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "missing job_id parameter"})
+		return
+	}
+
+	job, ok := s.JobStore.Get(jobID)
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "job not found"})
+		return
+	}
+
+	// Enforce client limit
+	if s.activeWSClients.Load() >= int32(s.WSMaxClients) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "too many concurrent WebSocket clients"})
+		return
+	}
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("[WS] Upgrade error: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	s.activeWSClients.Add(1)
+	defer s.activeWSClients.Add(-1)
+
+	// Send initial snapshot
+	initialPayload := jobToDetail(job)
+	if err := conn.WriteJSON(initialPayload); err != nil {
+		return
+	}
+
+	// subscribe returns a channel and a close function
+	ch, closeSub := s.subscribe(jobID)
+	defer closeSub()
+
+	// Action handling (Client -> Server)
+	go func() {
+		for {
+			var msg struct {
+				Action string `json:"action"`
+			}
+			if err := conn.ReadJSON(&msg); err != nil {
+				return
+			}
+			if msg.Action == "cancel" {
+				log.Printf("[WS] [%s] Received cancel action", jobID)
+				s.cancelJobInternal(jobID)
+			}
+		}
+	}()
+
+	// Ping management
+	ticker := time.NewTicker(s.WSPingInterval)
+	defer ticker.Stop()
+
+	// Result streaming (Server -> Client)
+	for {
+		select {
+		case update, ok := <-ch:
+			if !ok {
+				return
+			}
+			if err := conn.WriteJSON(update); err != nil {
+				return
+			}
+			// If it's a terminal event, close after sending (as per AC)
+			if m, ok := update.(map[string]interface{}); ok {
+				if t, ok := m["type"].(string); ok && t == "done" {
+					return
+				}
+			}
+		case <-ticker.C:
+			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+		case <-r.Context().Done():
+			return
+		}
+	}
 }

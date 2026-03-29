@@ -304,12 +304,25 @@ Monitor and control asynchronous jobs using the `/jobs` endpoint:
   coxec --server --job-store redis --job-store-dsn redis://localhost:6379/0
   ```
 
-- **Live Streaming**: `GET /jobs/:id/stream`
+- **Live Streaming (SSE)**: `GET /jobs/:id/stream`
   Opens a Server-Sent Events (SSE) connection to stream execution results in real-time as they complete. The stream continues until the job reaches a terminal state, at which point a final summary event is sent and the connection is closed.
 
   ```bash
   curl -H "Authorization: Bearer super-secret-token" -N http://localhost:8080/jobs/:id/stream
   ```
+
+- **Interactive Sessions (WebSocket)**: `GET /ws?job_id=:id`
+  Establish a bidirectional WebSocket connection for live monitoring and job control. 
+
+  ```bash
+  # Enable with -w flag on server start
+  websocat "ws://localhost:8080/ws?job_id=..."
+  ```
+
+  **Bidirectional Features:**
+  - **Live Results**: Receive structured JSON events (`type: "result"` and `type: "done"`) as tasks complete.
+  - **Cancel Action**: Send `{"action": "cancel"}` to immediately terminate a running or queued job.
+  - **Auto-Close**: The server automatically closes the connection once the final `"done"` event is delivered.
 
   **Events:**
   - `result`: Emitted for each completed execution.
@@ -447,6 +460,9 @@ The endpoint returns `400 Bad Request` for invalid payloads (e.g. non-positive v
 - `--job-history int`: Maximum number of completed jobs to retain (default: `1000`).
 - `--job-store string`: Job store backend: `memory` (default), `sqlite`, or `redis`.
 - `--job-store-dsn string`: Data source name for the job store (e.g., `./coxec-jobs.db` or `redis://localhost:6379/0`).
+- `-w, --enable-ws`: Enable WebSocket endpoint for live job monitoring and control (default: `false`).
+- `-i, --ws-ping-interval duration`: Interval between server pings to WebSocket clients (default: `30s`).
+- `-M, --ws-max-clients int`: Maximum concurrent WebSocket connections (default: `50`).
 - `-W, --enable-webhooks`: Enable background webhook delivery (default: `false`).
 - `-T, --callback-timeout duration`: Timeout for webhook HTTP requests (default: `10s`).
 - `-R, --callback-retry int`: Number of delivery retries with exponential backoff (default: `3`).
