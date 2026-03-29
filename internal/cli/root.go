@@ -139,6 +139,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 		v.BindPFlag("server.callback-timeout", cmd.Flags().Lookup("callback-timeout"))
 		v.BindPFlag("server.callback-retry", cmd.Flags().Lookup("callback-retry"))
 		v.BindPFlag("server.callback-allow-list", cmd.Flags().Lookup("callback-allow-list"))
+		v.BindPFlag("server.callback-allow-insecure", cmd.Flags().Lookup("callback-allow-insecure"))
 
 		loadedConfig, err := config.LoadConfig(v, configPath)
 		if err != nil {
@@ -164,6 +165,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 		callbackTimeout := v.GetDuration("server.callback-timeout")
 		callbackRetry := v.GetInt("server.callback-retry")
 		callbackAllowList := v.GetStringSlice("server.callback-allow-list")
+		callbackAllowInsecure := v.GetBool("server.callback-allow-insecure")
 
 		// Named jobs from config (try multiple locations for flexibility)
 		var namedJobs []config.NamedJobConfig
@@ -315,7 +317,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 				}
 			}
 
-			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations, maxConcurrentJobs, enableSync, js, jobTTL, jobHistory, enableWebhooks, callbackTimeout, callbackRetry, callbackAllowList, namedJobs)
+			s := server.NewServer(addr, port, Version, authToken, authBasic, authHmacSecret, tlsCert, tlsKey, registry, concurrency, iterations, maxConcurrentJobs, enableSync, js, jobTTL, jobHistory, enableWebhooks, callbackTimeout, callbackRetry, callbackAllowList, callbackAllowInsecure, namedJobs)
 			return s.Start(ctx)
 		}
 
@@ -543,6 +545,7 @@ Use 2>/dev/null or redirect stderr to hide the summary.
 	cmd.Flags().DurationP("callback-timeout", "T", 10*time.Second, "Maximum duration for each webhook delivery attempt")
 	cmd.Flags().IntP("callback-retry", "R", 3, "Number of retries for failed webhook deliveries")
 	cmd.Flags().StringSliceP("callback-allow-list", "L", []string{}, "CIDR ranges allowed for callback URLs (comma-separated, empty for unrestricted)")
+	cmd.Flags().BoolP("callback-allow-insecure", "k", false, "Allow HTTP callback URLs even when no allow-list is provided (local testing only)")
 	cmd.Flags().StringArray("job", nil, "Define a named job (name=... exec=... concurrency=...)")
 
 	// Register built-in client subcommands for help and discovery

@@ -33,6 +33,7 @@ type ServerConfig struct {
 	CallbackTimeout    string           `mapstructure:"callback-timeout"`
 	CallbackRetry      int              `mapstructure:"callback-retry"`
 	CallbackAllowList  []string         `mapstructure:"callback-allow-list"`
+	CallbackAllowInsecure bool          `mapstructure:"callback-allow-insecure"`
 	Jobs               []NamedJobConfig `mapstructure:"jobs"`
 }
 

@@ -392,7 +392,8 @@ Monitor and control asynchronous jobs using the `/jobs` endpoint:
   ```
 
   The server will send a JSON POST request to the `callback_url` when the job finishes (terminal state). The payload is identical to the `GET /jobs/:id` response. Delivery features include:
-  - **Automatic Retries**: Retries delivery up to `COXEC_SERVER_CALLBACK_RETRY` times (default: 3) with exponential backoff.
+  - **Automatic Retries**: Retries delivery up to `COXEC_SERVER_CALLBACK_RETRY` times (default: 3) with exponential backoff (1s, 2s, 4s...).
+  - **HTTPS Requirement**: By default, only HTTPS URLs are allowed. HTTP is permitted only if an explicit `--callback-allow-list` is provided and the target IP matches. For local testing, you can bypass this requirement completely using the `-k, --callback-allow-insecure` flag.
   - **CIDR Allow-list**: Restrict callback URLs to specific network ranges for security using `--callback-allow-list`.
   - **Custom Headers**: Pass authentication tokens or correlation IDs via `callback_headers`.
 
@@ -450,6 +451,7 @@ The endpoint returns `400 Bad Request` for invalid payloads (e.g. non-positive v
 - `-T, --callback-timeout duration`: Timeout for webhook HTTP requests (default: `10s`).
 - `-R, --callback-retry int`: Number of delivery retries with exponential backoff (default: `3`).
 - `-L, --callback-allow-list strings`: CIDR ranges allowed for callback URLs (e.g., `10.0.0.0/8,192.168.1.0/24`).
+- `-k, --callback-allow-insecure`: Allow HTTP callback URLs even when no allow-list is provided (local testing only).
 - `-c, --concurrency int`: Number of concurrent workers. (default: `1`)
 - `-n, --iterations int`: Total number of executions (defaults to `--concurrency`).
 - `--rate string`: Maximum execution rate (e.g., `50/s`, `10/m`, `1/h`).

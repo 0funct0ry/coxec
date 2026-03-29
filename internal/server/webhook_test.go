@@ -32,7 +32,7 @@ func TestWebhookDelivery(t *testing.T) {
 
 	registry := engine.NewBuiltinRegistry()
 	// Disable real execution in this test, just enough to trigger the flow
-	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, 1000, true, 1*time.Second, 1, nil, nil)
+	s := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, 1000, true, 1*time.Second, 1, nil, false, nil)
 	s.Status = StatusReady
 
 	t.Run("SuccessfulDelivery", func(t *testing.T) {
@@ -70,7 +70,7 @@ func TestWebhookDelivery(t *testing.T) {
 		}))
 		defer tsRetry.Close()
 
-		sRetry := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, 1000, true, 1*time.Second, 2, nil, nil)
+		sRetry := NewServer("127.0.0.1", 0, "1.0.0", "", "", "", "", "", registry, 1, 1, 0, true, NewInMemoryJobStore(), 24*time.Hour, 1000, true, 1*time.Second, 2, nil, false, nil)
 		
 		job := &Job{
 			ID:     "retry-job",
@@ -89,27 +89,45 @@ func TestWebhookDelivery(t *testing.T) {
 }
 
 func TestValidateCallbackURL(t *testing.T) {
-	s := &Server{
-		CallbackAllowList: []string{"127.0.0.0/8", "10.0.0.0/8"},
-	}
-
-	tests := []struct {
-		url     string
-		wantErr bool
-	}{
-		{"http://127.0.0.1:8080/callback", false},
-		{"https://10.0.0.5/webhook", false},
-		{"http://google.com/webhook", true}, // Assuming google.com doesn't resolve to 127/8 or 10/8
-		{"ftp://127.0.0.1/webhook", true},
-		{"not-a-url", true},
-	}
-
-	for _, tt := range tests {
-		err := s.validateCallbackURL(tt.url)
-		if (err != nil) != tt.wantErr {
-			t.Errorf("validateCallbackURL(%q) error = %v, wantErr %v", tt.url, err, tt.wantErr)
+	t.Run("HTTPSOnlyByDefault", func(t *testing.T) {
+		s := &Server{}
+		if err := s.validateCallbackURL("http://example.com"); err == nil {
+			t.Error("expected error for HTTP callback when no allow-list provided")
 		}
-	}
+		if err := s.validateCallbackURL("https://example.com"); err != nil {
+			t.Errorf("unexpected error for HTTPS callback: %v", err)
+		}
+	})
+	
+	t.Run("AllowInsecureOverride", func(t *testing.T) {
+		s := &Server{
+			CallbackAllowInsecure: true,
+		}
+		if err := s.validateCallbackURL("http://example.com"); err != nil {
+			t.Errorf("expected HTTP allowed when CallbackAllowInsecure is true, got: %v", err)
+		}
+	})
+
+	t.Run("AllowListOverridesHTTPS", func(t *testing.T) {
+		s := &Server{
+			CallbackAllowList: []string{"127.0.0.1/32"},
+		}
+		if err := s.validateCallbackURL("http://127.0.0.1/callback"); err != nil {
+			t.Errorf("expected HTTP allowed if in allow-list, got err: %v", err)
+		}
+		if err := s.validateCallbackURL("http://10.0.0.1/callback"); err == nil {
+			t.Error("expected error for IP not in allow-list")
+		}
+	})
+
+	t.Run("InvalidCIDRInAllowList", func(t *testing.T) {
+		s := &Server{
+			CallbackAllowList: []string{"not-a-cidr"},
+		}
+		if err := s.validateCIDRs(); err == nil {
+			t.Error("expected error for invalid CIDR")
+		}
+	})
 }
 
 func TestCIDRValidation(t *testing.T) {

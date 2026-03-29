@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -61,6 +62,7 @@ type Server struct {
 	CallbackTimeout    time.Duration
 	CallbackRetry      int
 	CallbackAllowList  []string
+	CallbackAllowInsecure bool
 	NamedJobs          map[string]config.NamedJobConfig
 	jobCancels         map[string]context.CancelFunc
 	jobSubscribers     sync.Map // map[string]*sync.Map (subID -> chan interface{})
@@ -159,7 +161,7 @@ type JobErrorReport struct {
 }
 
 // NewServer creates a new Server instance.
-func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry, defaultConcurrency, defaultIterations int, maxConcurrentJobs int, enableSync bool, jobStore JobStore, jobTTL time.Duration, jobHistory int, enableWebhooks bool, callbackTimeout time.Duration, callbackRetry int, callbackAllowList []string, namedJobs []config.NamedJobConfig) *Server {
+func NewServer(addr string, port int, version string, authToken string, authBasic string, authHmacSecret string, tlsCert string, tlsKey string, registry *engine.BuiltinRegistry, defaultConcurrency, defaultIterations int, maxConcurrentJobs int, enableSync bool, jobStore JobStore, jobTTL time.Duration, jobHistory int, enableWebhooks bool, callbackTimeout time.Duration, callbackRetry int, callbackAllowList []string, callbackAllowInsecure bool, namedJobs []config.NamedJobConfig) *Server {
 	njMap := make(map[string]config.NamedJobConfig)
 	for _, nj := range namedJobs {
 		njMap[nj.Name] = nj
@@ -188,13 +190,32 @@ func NewServer(addr string, port int, version string, authToken string, authBasi
 		CallbackTimeout:    callbackTimeout,
 		CallbackRetry:      callbackRetry,
 		CallbackAllowList:  callbackAllowList,
+		CallbackAllowInsecure: callbackAllowInsecure,
 		NamedJobs:          njMap,
 		jobCancels:         make(map[string]context.CancelFunc),
 	}
 }
 
+func (s *Server) validateCIDRs() error {
+	for _, raw := range s.CallbackAllowList {
+		_, _, err := net.ParseCIDR(raw)
+		if err != nil {
+			return fmt.Errorf("invalid CIDR in callback allow-list: %s", raw)
+		}
+	}
+	return nil
+}
+
 // Start starts the HTTP server and waits for it to shut down.
 func (s *Server) Start(ctx context.Context) error {
+	if err := s.validateCIDRs(); err != nil {
+		return err
+	}
+
+	if s.EnableWebhooks && s.CallbackAllowInsecure {
+		fmt.Fprintln(os.Stderr, "WARNING: Webhook insecure mode enabled. HTTP callback URLs will be accepted without an allow-list. This is insecure and should only be used for local testing.")
+	}
+
 	fullAddr := fmt.Sprintf("%s:%d", s.Addr, s.Port)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.HealthHandler)
@@ -276,13 +297,29 @@ func (s *Server) HealthHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	hlth := map[string]interface{}{
 		"status":         "ok",
 		"version":        s.Version,
 		"active_jobs":    s.ActiveJobs.Load(),
 		"job_store":      s.JobStore.Type(),
 		"uptime_seconds": int64(time.Since(s.StartTime).Seconds()),
-	})
+	}
+
+	if s.EnableWebhooks {
+		hlth["webhooks"] = map[string]interface{}{
+			"enabled":            true,
+			"callback_timeout":    s.CallbackTimeout.String(),
+			"callback_retry":      s.CallbackRetry,
+			"callback_allow_list": s.CallbackAllowList,
+			"callback_allow_insecure": s.CallbackAllowInsecure,
+		}
+	} else {
+		hlth["webhooks"] = map[string]interface{}{
+			"enabled": false,
+		}
+	}
+
+	_ = json.NewEncoder(w).Encode(hlth)
 }
 
 func (s *Server) checkConcurrencyLimit(w http.ResponseWriter) bool {
@@ -584,6 +621,11 @@ func (s *Server) runAsyncJob(w http.ResponseWriter, r *http.Request, req ExecReq
 	}
 
 	if req.CallbackURL != "" {
+		if !s.EnableWebhooks {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: "webhooks are disabled on this server"})
+			return
+		}
 		if err := s.validateCallbackURL(req.CallbackURL); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(ExecResponse{Status: "error", Error: fmt.Sprintf("invalid callback URL: %v", err)})
@@ -1588,6 +1630,9 @@ func (s *Server) validateCallbackURL(callbackURL string) error {
 	}
 
 	if len(s.CallbackAllowList) == 0 {
+		if !s.CallbackAllowInsecure && u.Scheme != "https" {
+			return fmt.Errorf("callback URL must use HTTPS when no allow-list is provided (use --callback-allow-insecure for local testing)")
+		}
 		return nil
 	}
 
@@ -1602,7 +1647,7 @@ func (s *Server) validateCallbackURL(callbackURL string) error {
 		for _, allowCIDR := range s.CallbackAllowList {
 			_, cidr, err := net.ParseCIDR(allowCIDR)
 			if err != nil {
-				// Should have been validated on startup, but handle just in case
+				// Already validated on startup, but handle just in case
 				continue
 			}
 			if cidr.Contains(ip) {
@@ -1611,7 +1656,7 @@ func (s *Server) validateCallbackURL(callbackURL string) error {
 			}
 		}
 		if !allowed {
-			return fmt.Errorf("callback IP %s is not in the allow-list", ip.String())
+			return fmt.Errorf("callback IP %s for host %s is not in the allow-list", ip.String(), host)
 		}
 	}
 
@@ -1633,8 +1678,8 @@ func (s *Server) sendWebhook(job *Job) {
 
 	for i := 0; i <= maxRetries; i++ {
 		if i > 0 {
-			// Exponential backoff: 2s, 4s, 8s...
-			backoff := time.Duration(1<<uint(i)) * time.Second
+			// Exponential backoff: 1s, 2s, 4s, 8s...
+			backoff := time.Duration(1<<uint(i-1)) * time.Second
 			time.Sleep(backoff)
 			log.Printf("[WEBHOOK] [%s] Retrying delivery (attempt %d/%d)...", job.ID, i, maxRetries)
 		}
